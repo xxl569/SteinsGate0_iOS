@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Godot 4 编辑器/导入缓存与本地 Windows 工具链
+.godot/
+godot_verify/.godot/
+bin/*.dll
+bin/*.a
+bin/*.dylib
+bin/*.so
+bin/*.o
+tools/godot/
+tools/ldid/
+tools/mingw_compat/
+
+# 构建产物与 IPA 壳包
+build/
+Payload/
+artifacts/
+reports/
+*.ipa
+*.pck
+*.zip
+
+# 运行时存档与日志
+saves/
+logs/
+
+# 严禁将原版游戏封包、视频、字库、脚本或临时资产提交到 Git 仓库
+*.mpk
+*.bk2
+*.wpk
+*.dds
+*.lay
+*.scx
+*.pdf
+*.ogv
+*.mpg
+*.mpeg
+*.dat
+*.ogg
+*.wav
+*.dll
+*.exe
+USRDIR/
+movie/
+tmp/
+temp/
+
+# Xcode
+DerivedData/
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+project.xcworkspace/
+xcuserdata/
+
+.DS_Store
+Thumbs.db

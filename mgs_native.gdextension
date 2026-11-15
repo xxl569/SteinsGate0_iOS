@@ -1,0 +1,12 @@
+[configuration]
+
+entry_symbol = "mgs_native_library_init"
+compatibility_minimum = "4.3"
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/libmgs_native.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/libmgs_native.windows.template_release.x86_64.dll"
+ios.debug.arm64 = "res://bin/libmgs_native.ios.template_debug.arm64.a"
+ios.release.arm64 = "res://bin/libmgs_native.ios.template_release.arm64.a"

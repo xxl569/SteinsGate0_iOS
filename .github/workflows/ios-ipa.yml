@@ -1,0 +1,160 @@
+name: ios-ipa
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.3-stable"
+  GODOT_TEMPLATES_DIR_NAME: "4.3.stable"
+  IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build MgsNative iOS arm64 static library
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min="${IPHONEOS_DEPLOYMENT_TARGET}" \
+            -isysroot "${SDK_PATH}" -O3 -std=c11 -Wall -Wextra \
+            -Inative/mgs_native/include \
+            -c native/mgs_native/src/mgs_core.c -o /tmp/mgs_core.o
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min="${IPHONEOS_DEPLOYMENT_TARGET}" \
+            -isysroot "${SDK_PATH}" -O3 -std=c11 -Wall -Wextra \
+            -Inative/mgs_native/include \
+            -c native/mgs_native/src/mgs_gdext.c -o /tmp/mgs_gdext.o
+          ar rcs bin/libmgs_native.ios.template_release.arm64.a /tmp/mgs_core.o /tmp/mgs_gdext.o
+          cp -f bin/libmgs_native.ios.template_release.arm64.a bin/libmgs_native.ios.template_debug.arm64.a
+          lipo -info bin/libmgs_native.ios.template_release.arm64.a
+
+      - name: Cache Godot 4.3 macOS & Export Templates
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/godot-4.3
+            ~/Library/Application Support/Godot/export_templates/4.3.stable
+          key: godot-4.3-ios-templates-v1
+
+      - name: Install Godot 4.3 & Export Templates
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/godot-4.3
+          mkdir -p "${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATES_DIR_NAME}"
+
+          GODOT_ZIP="${HOME}/.cache/godot-4.3/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          TPZ_FILE="${HOME}/.cache/godot-4.3/Godot_v${GODOT_VERSION}_export_templates.tpz"
+          BASE_URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}"
+
+          if [ ! -f "${GODOT_ZIP}" ]; then
+            curl -fsSL -o "${GODOT_ZIP}" "${BASE_URL}/Godot_v${GODOT_VERSION}_macos.universal.zip"
+          fi
+          rm -rf "${HOME}/.cache/godot-4.3/Godot.app"
+          unzip -q "${GODOT_ZIP}" -d "${HOME}/.cache/godot-4.3"
+          GODOT_BIN="${HOME}/.cache/godot-4.3/Godot.app/Contents/MacOS/Godot"
+          chmod +x "${GODOT_BIN}"
+          echo "GODOT_BIN=${GODOT_BIN}" >> "${GITHUB_ENV}"
+          "${GODOT_BIN}" --version
+
+          if [ ! -f "${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATES_DIR_NAME}/ios.zip" ]; then
+            if [ ! -f "${TPZ_FILE}" ]; then
+              curl -fsSL -o "${TPZ_FILE}" "${BASE_URL}/Godot_v${GODOT_VERSION}_export_templates.tpz"
+            fi
+            mkdir -p /tmp/godot_tpz
+            unzip -q -o "${TPZ_FILE}" "templates/ios.zip" "templates/version.txt" -d /tmp/godot_tpz
+            cp -f /tmp/godot_tpz/templates/ios.zip "${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATES_DIR_NAME}/ios.zip"
+            cp -f /tmp/godot_tpz/templates/version.txt "${HOME}/Library/Application Support/Godot/export_templates/${GODOT_TEMPLATES_DIR_NAME}/version.txt"
+            rm -rf /tmp/godot_tpz
+          fi
+
+      - name: Import Godot assets & validate GDScript syntax
+        run: |
+          set -euo pipefail
+          "${GODOT_BIN}" --headless --path "${PWD}" --import --quit || true
+          for s in scripts/*.gd; do
+            echo "Checking ${s}..."
+            "${GODOT_BIN}" --headless --path "${PWD}" --script "${s}" --check-only
+          done
+
+      - name: Export Godot iOS Xcode Project & PCK
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios artifacts reports
+          "${GODOT_BIN}" --headless --path "${PWD}" --export-release "iOS" "build/ios/SteinsGate0_iOS.xcodeproj"
+          "${GODOT_BIN}" --headless --path "${PWD}" --export-pack "iOS" "artifacts/SteinsGate0_iOS.pck"
+          ls -la build/ios
+
+      - name: Build SteinsGate0_iOS.app via xcodebuild (arm64, unsigned shell)
+        run: |
+          set -euo pipefail
+          XCODEPROJ="build/ios/SteinsGate0_iOS.xcodeproj"
+          xcodebuild -list -json -project "${XCODEPROJ}" > build/ios/xcode_list.json
+          BUILD_ARGS=()
+          SCHEME_NAME="$(python3 -c 'import json; d=json.load(open("build/ios/xcode_list.json")); s=d.get("project",{}).get("schemes",[]); print("SteinsGate0_iOS" if "SteinsGate0_iOS" in s else (s[0] if s else ""))')"
+          TARGET_NAME="$(python3 -c 'import json; d=json.load(open("build/ios/xcode_list.json")); t=d.get("project",{}).get("targets",[]); print("SteinsGate0_iOS" if "SteinsGate0_iOS" in t else (t[0] if t else "SteinsGate0_iOS"))')"
+          if [ -n "${SCHEME_NAME}" ]; then
+            BUILD_ARGS+=(-scheme "${SCHEME_NAME}" -destination 'generic/platform=iOS')
+          else
+            BUILD_ARGS+=(-target "${TARGET_NAME}" -arch arm64)
+          fi
+
+          xcodebuild \
+            -project "${XCODEPROJ}" \
+            "${BUILD_ARGS[@]}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ios/derived \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET}" \
+            build
+
+          APP="$(find build/ios/derived/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          test -n "${APP}" && test -d "${APP}"
+          echo "BUILT_APP=${APP}" >> "${GITHUB_ENV}"
+          EXEC_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${APP}/Info.plist")"
+          test -x "${APP}/${EXEC_NAME}"
+          file "${APP}/${EXEC_NAME}"
+          lipo -info "${APP}/${EXEC_NAME}" || true
+
+      - name: Pseudo-sign with ldid & Package TrollStore IPA + Windows Shell
+        run: |
+          set -euo pipefail
+          if ! command -v ldid >/dev/null 2>&1; then
+            brew install ldid
+          fi
+          APP="${BUILT_APP}"
+          python3 tools/package_trollstore_ipa.py package \
+            --app-shell "${APP}" \
+            --pck "artifacts/SteinsGate0_iOS.pck" \
+            --entitlements "platforms/ios/Entitlements_TrollStore.plist" \
+            --output "artifacts/SteinsGate0_iOS_TrollStore.ipa" \
+            --report-json "reports/ipa_report.json"
+
+          rm -rf "${APP}/_CodeSignature"
+          APP_DIR="$(dirname "${APP}")"
+          APP_BASE="$(basename "${APP}")"
+          (cd "${APP_DIR}" && zip -qry "${OLDPWD}/artifacts/SteinsGate0_iOS_Shell.zip" "${APP_BASE}")
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteinsGate0_iOS_TrollStore
+          path: |
+            artifacts/SteinsGate0_iOS_TrollStore.ipa
+            artifacts/SteinsGate0_iOS_Shell.zip
+            artifacts/SteinsGate0_iOS.pck
+            reports/ipa_report.json
+          retention-days: 30
