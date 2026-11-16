@@ -18,6 +18,7 @@ signal se_play_requested(se_idx: int, loop: bool)
 signal se_stop_requested(channel: int)
 signal voice_play_requested(voice_idx: int, char_id: int)
 signal movie_play_requested(movie_idx: int)
+signal movie_stop_requested()
 signal mask_wipe_requested(mask_id: int, duration_frames: int)
 signal choices_requested(choices: Array)
 signal phone_event(subop: int, args: Array)
@@ -477,7 +478,13 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var e_slot := Sc3Expr.eval(data, p, self, th); p = int(e_slot["end_pos"])
 			var e_idx := Sc3Expr.eval(data, p, self, th); p = int(e_idx["end_pos"])
 			th.pc = p
-			load_script_into_slot(int(e_slot["value"]), int(e_idx["value"]))
+			var sid := int(e_slot["value"])
+			if load_script_into_slot(sid, int(e_idx["value"])):
+				if sid == 3 and _scripts.has(3):
+					var sname := str(_scripts[3]["name"])
+					if sname.to_upper().begins_with("SG0_"):
+						_active_slot = 3
+						script_switched.emit(sname)
 		0x05: # Wait(frames)
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			th.pc = p
@@ -821,7 +828,7 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 		0x01, 0x03, 0x20:
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			th.pc = p
-		0x24: # MovieWait (Game.exe 0x4592c0)
+		0x24, 0x29: # MovieWait (Game.exe 0x4592c0: 0x24/0x29 共用)
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			th.pc = p
 			if _movie_playing:
@@ -973,7 +980,7 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			elif sub == 3:
 				p += 2; p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x26, 0x2A:
+		0x26:
 			var sub := _rd_u8(data, p); p += 1
 			if sub == 99:
 				p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
@@ -981,14 +988,37 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				p += 1
 			p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x10, 0x28, 0x2B:
+		0x2A:
+			var sub := _rd_u8(data, p); p += 1
+			if sub == 99:
+				p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
+			else:
+				p += 1
+			p = Sc3Expr.skip(data, p)
+			th.pc = p
+		0x10, 0x2B:
 			p += 1
 			th.pc = p
-		0x23: # MovieCtrl (Game.exe 0x458fc0: 等待视频结束或执行收尾指令)
-			var _sub := _rd_u8(data, p); p += 1
+		0x23, 0x28: # MovieCtrl (Game.exe 0x458fc0: 按 sub 分支区分阻塞等待/状态查询/强制结束)
+			var sub := _rd_u8(data, p); p += 1
 			th.pc = p
-			if _movie_playing:
-				th.wait_mode = WaitMode.MOVIE
+			match sub:
+				0, 0x14:
+					if _movie_playing:
+						th.wait_mode = WaitMode.MOVIE
+				2, 0x16:
+					if _movie_playing:
+						notify_movie_finished()
+						movie_stop_requested.emit()
+					else:
+						set_flag(0x73B, 0)
+						set_flag(0x73C, 0)
+				3, 0x17:
+					if not _movie_playing:
+						set_flag(0x73B, 0)
+						set_flag(0x73C, 0)
+				_:
+					pass
 		_:
 			th.pc = p
 
@@ -1179,6 +1209,7 @@ func export_state() -> Dictionary:
 			"wait_mode": th.wait_mode,
 			"wait_frames": th.wait_frames,
 			"vars": Array(th.vars),
+			"fields": th.fields.duplicate(true),
 			"call_stack": th.call_stack.duplicate(true),
 		})
 
@@ -1232,6 +1263,10 @@ func import_state(state: Dictionary) -> bool:
 		var v_arr: Array = st.get("vars", [])
 		for i in range(mini(THREAD_VAR_COUNT, v_arr.size())):
 			th.vars[i] = int(v_arr[i])
+		var f_dict: Variant = st.get("fields", {})
+		if f_dict is Dictionary:
+			for fk in (f_dict as Dictionary).keys():
+				th.fields[int(fk)] = int((f_dict as Dictionary)[fk])
 		for cf in st.get("call_stack", []):
 			th.call_stack.append(cf)
 		_threads.append(th)

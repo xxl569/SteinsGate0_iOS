@@ -2,9 +2,11 @@ class_name MgsVideoPlayer
 extends CanvasLayer
 ## 全屏 Theora (.ogv) 过场动画播放器（支持触控点击跳过与防误触防抖）
 
+signal movie_started(movie_idx: int)
 signal movie_finished(movie_idx: int, skipped: bool)
 
-const SKIP_DEBOUNCE_SEC := 0.85
+const SKIP_DEBOUNCE_SEC := 0.60
+const EOF_STALL_SEC := 1.50
 
 var _vfs: MgsVfs = null
 var _vm: Sc3Vm = null
@@ -15,6 +17,8 @@ var _hint_label: Label = null
 var _is_playing: bool = false
 var _current_movie_idx: int = -1
 var _play_elapsed: float = 0.0
+var _last_stream_pos: float = -1.0
+var _pos_stall_sec: float = 0.0
 
 
 func _ready() -> void:
@@ -38,13 +42,14 @@ func _ensure_ui() -> void:
 	_player.name = "TheoraPlayer"
 	_player.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_player.expand = true
+	_player.buffering_msec = 1000
 	_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player.finished.connect(_on_video_finished)
 	_backdrop.add_child(_player)
 
 	_hint_label = Label.new()
 	_hint_label.name = "SkipHint"
-	_hint_label.text = "点击屏幕跳过动画"
+	_hint_label.text = "轻触屏幕跳过动画"
 	_hint_label.modulate = Color(1, 1, 1, 0.55)
 	_hint_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	_hint_label.offset_left = -260
@@ -52,6 +57,7 @@ func _ensure_ui() -> void:
 	_hint_label.offset_right = -24
 	_hint_label.offset_bottom = -18
 	_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_backdrop.add_child(_hint_label)
 
 
@@ -64,6 +70,12 @@ func bind_vm(vm: Sc3Vm) -> void:
 	_vm = vm
 	if _vm != null and not _vm.movie_play_requested.is_connected(play_movie):
 		_vm.movie_play_requested.connect(play_movie)
+	if _vm != null and not _vm.movie_stop_requested.is_connected(_on_vm_stop_requested):
+		_vm.movie_stop_requested.connect(_on_vm_stop_requested)
+
+
+func _on_vm_stop_requested() -> void:
+	stop_movie(true)
 
 
 func apply_config(cfg: ConfigManager) -> void:
@@ -75,10 +87,28 @@ func apply_config(cfg: ConfigManager) -> void:
 
 
 func _process(delta: float) -> void:
-	if _is_playing:
-		_play_elapsed += delta
-		if _hint_label != null:
-			_hint_label.visible = _play_elapsed >= SKIP_DEBOUNCE_SEC
+	if not _is_playing:
+		return
+	_play_elapsed += delta
+	if _hint_label != null:
+		_hint_label.visible = _play_elapsed >= SKIP_DEBOUNCE_SEC
+	if _player == null:
+		return
+	# EOF 看门狗：防止 Godot 4.3 在 iOS CoreAudio/Theora 末尾漏发 finished 信号或最后一帧卡死
+	if _play_elapsed >= 0.25 and not _player.is_playing():
+		_finish_internal(false)
+		return
+	if _play_elapsed >= 1.5:
+		var cur_pos := _player.stream_position
+		if _last_stream_pos >= 0.0 and absf(cur_pos - _last_stream_pos) < 0.001:
+			_pos_stall_sec += delta
+			if _pos_stall_sec >= EOF_STALL_SEC:
+				_player.stop()
+				_finish_internal(false)
+				return
+		else:
+			_last_stream_pos = cur_pos
+			_pos_stall_sec = 0.0
 
 
 func play_movie(movie_idx: int) -> bool:
@@ -110,9 +140,12 @@ func play_movie_file(ogv_path: String, movie_idx: int = -1) -> bool:
 	_player.stream = stream
 	_current_movie_idx = movie_idx
 	_play_elapsed = 0.0
+	_last_stream_pos = -1.0
+	_pos_stall_sec = 0.0
 	_is_playing = true
 	visible = true
 	_player.play()
+	movie_started.emit(movie_idx)
 	return true
 
 
@@ -128,20 +161,36 @@ func is_movie_playing() -> bool:
 	return _is_playing
 
 
+func _input(event: InputEvent) -> void:
+	if not _is_playing or not visible:
+		return
+	if _is_skip_trigger_event(event):
+		if _play_elapsed >= SKIP_DEBOUNCE_SEC:
+			stop_movie(true)
+		get_viewport().set_input_as_handled()
+
+
 func _on_backdrop_input(event: InputEvent) -> void:
 	if not _is_playing or _play_elapsed < SKIP_DEBOUNCE_SEC:
 		return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		stop_movie(true)
-	elif event is InputEventScreenTouch and event.pressed:
+	if _is_skip_trigger_event(event):
 		stop_movie(true)
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _is_playing or _play_elapsed < SKIP_DEBOUNCE_SEC:
 		return
-	if event.is_action_pressed("ui_accept") or event.is_action_pressed("ui_cancel"):
+	if _is_skip_trigger_event(event):
 		stop_movie(true)
+
+
+func _is_skip_trigger_event(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		return mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	if event is InputEventScreenTouch:
+		return (event as InputEventScreenTouch).pressed
+	return event.is_action_pressed("ui_accept") or event.is_action_pressed("ui_cancel")
 
 
 func _on_video_finished() -> void:

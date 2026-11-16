@@ -157,6 +157,35 @@ func _run() -> void:
 	assert(absf(sp_chk.position.y - y_before) < 0.001, "立绘不应出现垂直跳动")
 	assert(sp_chk.scale == s_before and sp_chk.scale == MgsStage.CHARA_DISPLAY_SCALE, "立绘不应在说话时发生拉伸变形")
 	print("AV & static portrait parity ok: dlg_tick=%d bgms=%s ses=%s movies=%s" % [dlg_tick, str(av_bgms), str(av_ses), str(av_movies)])
+
+	# 6. 序章全流程连贯跳转 (MAIN00 -> SG0_00_01 -> SG0_00_02) 与 MgsVideoPlayer EOF 看门狗/触控防卡死校验
+	assert(vm_av.jump_to_script("MAIN00.scx", 2), "MAIN00 label 2 起步失败")
+	var m0_switched: Array[String] = []
+	vm_av.script_switched.connect(func(sn: String): m0_switched.append(sn))
+	for _t in range(4500):
+		vm_av.step_frame(1)
+		if vm_av.is_waiting_for_movie() or vm_av._movie_playing:
+			vm_av.notify_movie_finished()
+		if vm_av.is_waiting_for_click():
+			vm_av.notify_user_advance()
+			if m0_switched.has("SG0_00_02.scx") and vm_av.backlog.size() >= 97:
+				break
+	assert(m0_switched.has("SG0_00_01.scx") and m0_switched.has("SG0_00_02.scx"),
+		"MAIN00 未能从 SG0_00_01 自动过渡到 SG0_00_02，实际切换: %s" % [str(m0_switched)])
+
+	var vp_chk := MgsVideoPlayer.new()
+	get_root().add_child(vp_chk)
+	vp_chk.bind_vfs(vfs)
+	vp_chk.bind_vm(vm_av)
+	assert(vp_chk.play_movie(11), "MgsVideoPlayer 播放 IMV008 失败")
+	# 模拟播放器在末尾漏发 finished 信号（_player.stop() 后 _is_playing 仍为 true），验证 EOF 看门狗自动解除卡死
+	vp_chk._player.stop()
+	vp_chk._play_elapsed = 0.5
+	vp_chk._process(0.016)
+	assert(not vp_chk.is_movie_playing() and not vp_chk.visible, "EOF 看门狗未在停播后自动收尾释放遮罩")
+	vp_chk.queue_free()
+	print("MAIN00 chapter chain & VideoPlayer EOF watchdog ok: switched=%s" % [str(m0_switched)])
+
 	audio_chk.stop_bgm(0)
 	audio_chk.stop_se(-1)
 	audio_chk.queue_free()

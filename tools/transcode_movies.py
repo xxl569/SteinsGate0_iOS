@@ -78,6 +78,7 @@ def transcode_one(
     max_width: int,
     v_quality: int,
     a_quality: int,
+    max_bitrate_k: int,
     force: bool,
 ) -> tuple[str, bool, str]:
     """转码单个 .bk2 文件为 .ogv，返回 (文件名, 是否成功, 详情)。"""
@@ -100,8 +101,10 @@ def transcode_one(
 
         info = query_bink_info(bridge, dll, bk2)
         w, h = int(info["width"]), int(info["height"])
-        fr_num, fr_den = int(info["frame_rate"]), int(info["frame_div"])
-        fps_str = f"{fr_num}/{fr_den}"
+        fr_num, fr_den = int(info["frame_rate"]), max(1, int(info["frame_div"]))
+        fps_val = fr_num / fr_den
+        # 规范化 10000000/333333 这类近似 30fps，避免 Ogg Theora 时钟分数漂移
+        fps_str = "30" if abs(fps_val - 30.0) < 0.08 else f"{fr_num}/{fr_den}"
 
         out_ogv.parent.mkdir(parents=True, exist_ok=True)
         tmp_ogv = out_ogv.with_suffix(".tmp.ogv")
@@ -116,7 +119,8 @@ def transcode_one(
         ]
 
         pix_fmt_in = "bgra" if surface == 3 else "rgba"
-        vf = f"scale='min({max_width},iw)':-2:flags=lanczos,format=yuv420p"
+        # 目标宽度强制 16 像素对齐，减少 iOS libtheora 软解裁剪与色度填充抖动
+        vf = f"scale='trunc(min({max_width},iw)/16)*16':-16:flags=lanczos,format=yuv420p"
 
         ff_cmd = [
             ffmpeg, "-y", "-v", "error",
@@ -134,11 +138,20 @@ def transcode_one(
 
         ff_cmd.extend([
             "-vf", vf,
+            "-r", fps_str,
             "-c:v", "libtheora",
-            "-qscale:v", str(v_quality),
+            "-g", "30",
         ])
+        if max_bitrate_k > 0:
+            ff_cmd.extend([
+                "-b:v", f"{max_bitrate_k}k",
+                "-maxrate", f"{int(max_bitrate_k * 1.25)}k",
+                "-bufsize", f"{int(max_bitrate_k * 1.5)}k",
+            ])
+        else:
+            ff_cmd.extend(["-qscale:v", str(v_quality)])
         if has_audio:
-            ff_cmd.extend(["-c:a", "libvorbis", "-qscale:a", str(a_quality)])
+            ff_cmd.extend(["-c:a", "libvorbis", "-ar", "44100", "-qscale:a", str(a_quality)])
         ff_cmd.extend(["-f", "ogg", str(tmp_ogv)])
 
         p_bridge = subprocess.Popen(bridge_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -212,14 +225,15 @@ def verify_all_ogv(src_dir: Path, out_dir: Path, ffprobe: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="STEINS;GATE 0 批量转码 .bk2 -> .ogv")
-    parser.add_argument("--src-dir", type=Path, default=Path(r"U:\anti\projects\STEINS GATE 0\USRDIR\movie\1920x1080"))
+    parser.add_argument("--src-dir", type=Path, default=Path(r"U:\anti\projects\STEINS GATE 0\USRDIR\movie\1280x720"))
     parser.add_argument("--out-dir", type=Path, default=Path(r"U:\anti\temp\SteinsGate0_iOS\SteinsGate0_iOS_Documents\movie"))
     parser.add_argument("--dll", type=Path, default=Path(r"U:\anti\projects\STEINS GATE 0\bink2w32.dll"))
     parser.add_argument("--bridge-exe", type=Path, default=Path(r"U:\anti\temp\SteinsGate0_iOS\bink2_raw.exe"))
     parser.add_argument("--surface", type=int, default=3, help="3=BINKSURFACE32(BGRA), 4=BINKSURFACE32R(RGBA)")
-    parser.add_argument("--max-width", type=int, default=1600)
+    parser.add_argument("--max-width", type=int, default=1280)
     parser.add_argument("--v-quality", type=int, default=7)
     parser.add_argument("--a-quality", type=int, default=5)
+    parser.add_argument("--max-bitrate-k", type=int, default=2200, help="受控码率(kbps)防止iOS单核Theora软解突发掉速; 0表示使用qscale")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--only", nargs="*", help="仅转码指定文件名（如 OP.bk2 IMV011.bk2）")
@@ -258,6 +272,7 @@ def main() -> int:
                 args.max_width,
                 args.v_quality,
                 args.a_quality,
+                args.max_bitrate_k,
                 args.force,
             ): bk2.name
             for bk2 in bk2s

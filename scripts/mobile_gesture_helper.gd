@@ -18,6 +18,7 @@ var is_auto_active: bool = false
 var is_skip_active: bool = false
 var is_dialogue_mode: bool = false
 var is_modal_blocked: bool = false
+var is_movie_playing_block: bool = false
 
 var _hud_container: HBoxContainer = null
 var _btn_skip: Button = null
@@ -94,9 +95,14 @@ func set_modal_blocked(blocked: bool) -> void:
 	_sync_hud_visibility()
 
 
+func set_movie_playing(playing: bool) -> void:
+	is_movie_playing_block = playing
+	_sync_hud_visibility()
+
+
 func _sync_hud_visibility() -> void:
 	if _hud_container != null:
-		_hud_container.visible = is_dialogue_mode and not is_modal_blocked
+		_hud_container.visible = is_dialogue_mode and not is_modal_blocked and not is_movie_playing_block
 
 
 func set_mode_states(auto_on: bool, skip_on: bool) -> void:
@@ -124,7 +130,7 @@ func _apply_safe_area() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if not is_dialogue_mode or is_modal_blocked or not visible:
+	if not is_dialogue_mode or is_modal_blocked or is_movie_playing_block or not visible:
 		return
 	# 当处于 Auto 或 Skip 状态且点击在非 HUD 按钮区域时，按下瞬间先解除自动/快进（不直接触发误推进）
 	var is_press := false

@@ -177,6 +177,19 @@ func _connect_signals() -> void:
 	gesture_helper.open_title_requested.connect(return_to_title)
 	gesture_helper.toggle_hide_ui_requested.connect(func(): panels.toggle_hide_ui())
 
+	video.movie_started.connect(func(_mid: int):
+		if stage != null:
+			stage.visible = false
+		if gesture_helper != null:
+			gesture_helper.set_movie_playing(true)
+	)
+	video.movie_finished.connect(func(_mid: int, _skipped: bool):
+		if stage != null:
+			stage.visible = true
+		if gesture_helper != null:
+			gesture_helper.set_movie_playing(false)
+	)
+
 
 func _mount_and_boot() -> void:
 	var ok := false
@@ -277,12 +290,19 @@ func start_new_game() -> void:
 	_skip_mode = false
 	_play_time_sec = 0.0
 	_sc3_frame_accum = 0.0
+	if video != null and video.is_movie_playing():
+		video.stop_movie(false)
+	stage.visible = true
+	gesture_helper.set_movie_playing(false)
 	_update_mode_indicators()
 	stage.reset_stage()
 	vm.start_boot_script()
 	for _f in range(15):
 		vm.step_frame(1)
-	_running_story = vm.jump_to_script("SG0_00_01.scx", 0)
+	if vfs.find_script_entry_name("MAIN00.scx") != "":
+		_running_story = vm.jump_to_script("MAIN00.scx", 2)
+	else:
+		_running_story = vm.jump_to_script("SG0_00_01.scx", 0)
 	if _running_story:
 		panels.show_dialogue_mode()
 		gesture_helper.set_dialogue_mode(true)
@@ -293,6 +313,11 @@ func return_to_title() -> void:
 	_running_story = false
 	_auto_mode = false
 	_skip_mode = false
+	_sc3_frame_accum = 0.0
+	if video != null and video.is_movie_playing():
+		video.stop_movie(false)
+	stage.visible = true
+	gesture_helper.set_movie_playing(false)
 	_update_mode_indicators()
 	audio.stop_bgm(10)
 	audio.stop_voice()
@@ -485,6 +510,11 @@ func _on_load_slot(slot_id: int) -> void:
 		_running_story = true
 		_auto_mode = false
 		_skip_mode = false
+		_sc3_frame_accum = 0.0
+		if video != null and video.is_movie_playing():
+			video.stop_movie(false)
+		stage.visible = true
+		gesture_helper.set_movie_playing(false)
 		_play_time_sec = float(meta.get("play_time_sec", 0))
 		_update_mode_indicators()
 		panels.show_dialogue_mode()
