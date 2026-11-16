@@ -50,6 +50,7 @@ class ThreadCtx:
 	var wait_param: int = 0
 	var call_stack: Array[Dictionary] = [] # {slot, pc}
 	var vars: PackedInt32Array = PackedInt32Array()
+	var fields: Dictionary = {} # 0x0018 SetThreadField
 	var loop_counts: Dictionary = {} # pc -> remaining
 
 	func _init() -> void:
@@ -316,6 +317,8 @@ func notify_user_advance() -> void:
 
 func notify_movie_finished() -> void:
 	_movie_playing = false
+	set_flag(0x73B, 0)
+	set_flag(0x73C, 0)
 	for th in _threads:
 		if th.alive and th.wait_mode == WaitMode.MOVIE:
 			th.wait_mode = WaitMode.NONE
@@ -578,40 +581,36 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			set_flag(int(e1["value"]), 0)
 			th.pc = p
-		0x14: # PlayBGM(bgm_expr, loop_expr)
+		0x14: # CopyFlagBit (Game.exe 0x45e540: GetFlag -> SetFlag，非 BGM)
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
 			th.pc = p
-			bgm_play_requested.emit(int(e1["value"]), int(e2["value"]) != 0, 0)
-		0x15: # PlayBGMEx(subop_u8, bgm_expr, loop_expr, fade_or_lbl)
-			var sub := _rd_u8(data, p); p += 1
-			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
-			var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
-			var _u16 := _rd_u16(data, p); p += 2
-			th.pc = p
-			if sub == 0 or sub == 1:
-				bgm_play_requested.emit(int(e1["value"]), int(e2["value"]) != 0, 0)
-		0x16: # StopBGM(subop_u8, arg1, arg2)
+			set_flag(int(e2["value"]), get_flag(int(e1["value"])))
+		0x15: # JumpIfPad (Game.exe 0x45e580: 按键触发条件跳转，非 PlayBGMEx)
 			var _sub := _rd_u8(data, p); p += 1
-			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
-			var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
+			p = Sc3Expr.skip(data, p)
+			p = Sc3Expr.skip(data, p)
+			p += 2
 			th.pc = p
-			bgm_stop_requested.emit(int(e1["value"]))
-		0x17: # FadeBGM(subop_u8, e1, e2, e3)
+		0x16: # PadTest (Game.exe 0x45ace0: 按键读取，非 StopBGM)
+			var _sub := _rd_u8(data, p); p += 1
+			p = Sc3Expr.skip(data, p)
+			p = Sc3Expr.skip(data, p)
+			th.pc = p
+		0x17: # PadWait (Game.exe 0x45adb0: 带计数的按键等待)
 			var _sub := _rd_u8(data, p); p += 1
 			for _k in range(3):
-				var ek := Sc3Expr.eval(data, p, self, th); p = int(ek["end_pos"])
+				p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x18: # PlaySE(se_expr, loop_expr)
+		0x18: # SetThreadField (Game.exe 0x45aec0: th->field[idx] = val，非 PlaySE)
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
 			th.pc = p
-			se_play_requested.emit(int(e1["value"]), int(e2["value"]) != 0)
-		0x19: # StopSE(ch_expr, fade_expr)
-			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			th.fields[int(e1["value"])] = int(e2["value"])
+		0x19: # SetAchievement / FlagMask (Game.exe 0x45af00 -> 0x466d20，非 StopSE)
+			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
 			th.pc = p
-			se_stop_requested.emit(int(e1["value"]))
 		0x1B: # SwitchScript(script_mpk_idx_expr, label)
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			var lid := _rd_u16(data, p)
@@ -634,19 +633,48 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			var _u16 := _rd_u16(data, p); p += 2
 			th.pc = p
-		0x21: # BGMFadeOrSync
+		0x21: # BGMPlay (Game.exe 0x45b2a0: subop_u8, bgm_expr[, loop_expr])
 			var sub := _rd_u8(data, p); p += 1
-			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			var loop := (sub == 0 or sub == 1 or sub == 3)
 			if sub == 2:
-				var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
+				var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
+				loop = (int(e2["value"]) != 0)
 			th.pc = p
-		0x23: # BGExControl
+			var bgm_id := int(e1["value"])
+			if bgm_id < 0 or bgm_id >= 0x2710:
+				bgm_stop_requested.emit(15)
+			else:
+				bgm_play_requested.emit(bgm_id, loop, 0)
+		0x22: # BGMStop (Game.exe 0x45b5b0)
 			var _sub := _rd_u8(data, p); p += 1
-			var s1 := _rd_u8(data, p); p += 1
-			if s1 != 2:
-				var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
-				var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
 			th.pc = p
+			bgm_stop_requested.emit(15)
+		0x23: # SEPlay (Game.exe 0x45b6c0: ch_u8, mode_u8[, se_expr, loop_expr])
+			var ch := _rd_u8(data, p); p += 1
+			var mode := _rd_u8(data, p); p += 1
+			if mode == 2:
+				th.pc = p
+				se_stop_requested.emit(ch)
+			else:
+				var e_se := Sc3Expr.eval(data, p, self, th); p = int(e_se["end_pos"])
+				var e_lp := Sc3Expr.eval(data, p, self, th); p = int(e_lp["end_pos"])
+				th.pc = p
+				var se_id := int(e_se["value"])
+				if se_id < 0 or se_id >= 0x2710:
+					se_stop_requested.emit(ch)
+				else:
+					se_play_requested.emit(se_id, int(e_lp["value"]) != 0)
+		0x24: # AudioReset (Game.exe 0x45b900)
+			var sub := _rd_u8(data, p); p += 1
+			th.pc = p
+			if sub == 0xFF:
+				bgm_stop_requested.emit(0)
+				se_stop_requested.emit(-1)
+			elif sub <= 2:
+				se_stop_requested.emit(sub)
+			elif sub >= 10 and sub <= 12:
+				se_stop_requested.emit(sub - 10)
 		0x25, 0x4E: # 3-expr
 			for _k in range(3):
 				var ek := Sc3Expr.eval(data, p, self, th); p = int(ek["end_pos"])
@@ -658,13 +686,24 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 		0x2A: # ReturnIfWait
 			var _sub := _rd_u8(data, p); p += 1
 			th.pc = p
-		0x2E, 0x2F, 0x38, 0x4D: # subop + 1 expr
-			var sub := _rd_u8(data, p); p += 1
-			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+		0x2E, 0x2F, 0x4D: # subop + 1 expr
+			var _sub := _rd_u8(data, p); p += 1
+			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			th.pc = p
-			if b1 == 0x38 and sub == 0:
-				voice_play_requested.emit(int(e1["value"]), 0)
-		0x33, 0x3D: # 2-expr
+		0x38: # SEStop (Game.exe 0x45c6b0: ch_u8, fade_expr)
+			var ch := _rd_u8(data, p); p += 1
+			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
+			th.pc = p
+			se_stop_requested.emit(ch)
+		0x33: # WaitFramesCounted (Game.exe 0x45c520: 开场动画与转场真实 60fps 帧等待)
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
+			th.pc = p
+			var cnt := int(e1["value"]) & 0x3FF
+			if cnt > 0:
+				th.wait_mode = WaitMode.FRAMES
+				th.wait_frames = cnt
+		0x3D: # 2-expr
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
 			th.pc = p
@@ -676,18 +715,36 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			if sub == 0:
 				p += 3
 			th.pc = p
-		0x37:
-			var _sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p)
-			p = Sc3Expr.skip(data, p)
+		0x37: # SEPlayEx (Game.exe 0x45c610: ch_u8, se_expr, loop_expr)
+			var ch := _rd_u8(data, p); p += 1
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
 			th.pc = p
-		0x3A:
+			var se_id := int(e1["value"])
+			if se_id < 0 or se_id >= 0x2710:
+				se_stop_requested.emit(ch)
+			else:
+				se_play_requested.emit(se_id, int(e2["value"]) != 0)
+		0x3A: # BGMPlay2 (Game.exe 0x45c810)
 			var sub := _rd_u8(data, p); p += 1
 			if sub == 0:
-				p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
+				var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+				var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
+				th.pc = p
+				var bgm_id := int(e1["value"])
+				if bgm_id >= 0 and bgm_id < 0x2710:
+					bgm_play_requested.emit(bgm_id, true, 0)
+			elif sub == 1:
+				th.pc = p
+				bgm_stop_requested.emit(15)
 			elif sub == 2 or sub == 3:
-				p = Sc3Expr.skip(data, p)
-			th.pc = p
+				var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+				th.pc = p
+				var bgm_id := int(e1["value"])
+				if bgm_id >= 0 and bgm_id < 0x2710:
+					bgm_play_requested.emit(bgm_id, true, 0)
+			else:
+				th.pc = p
 		0x43: # TitleOrSystem43
 			var sub := _rd_u8(data, p); p += 1
 			var s1 := _rd_u8(data, p); p += 1
@@ -746,7 +803,7 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			p = Sc3Expr.skip(data, p)
 			var _lid := _rd_u16(data, p); p += 2
 			th.pc = p
-		0x1E, 0x22, 0x24, 0x29, 0x2D, 0x30, 0x36, 0x39, 0x3B, 0x3C, 0x41, 0x44, 0x49, 0x4A:
+		0x1E, 0x29, 0x2D, 0x30, 0x36, 0x39, 0x3B, 0x3C, 0x41, 0x44, 0x49, 0x4A:
 			p += 1
 			th.pc = p
 		_:
@@ -761,9 +818,14 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			for _k in range(3):
 				p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x01, 0x03, 0x20, 0x24:
+		0x01, 0x03, 0x20:
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			th.pc = p
+		0x24: # MovieWait (Game.exe 0x4592c0)
+			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
+			th.pc = p
+			if _movie_playing:
+				th.wait_mode = WaitMode.MOVIE
 		0x02: # LoadPic(surf_id, archive_type, file_id)
 			var e_surf := Sc3Expr.eval(data, p, self, th); p = int(e_surf["end_pos"])
 			var e_arc := Sc3Expr.eval(data, p, self, th); p = int(e_arc["end_pos"])
@@ -899,6 +961,8 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				if mov_id < 0:
 					mov_id = int(em1["value"])
 				_movie_playing = true
+				set_flag(0x73B, 1)
+				set_flag(0x73C, 1)
 				movie_play_requested.emit(mov_id)
 		0x25:
 			var sub := _rd_u8(data, p); p += 1
@@ -917,9 +981,14 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				p += 1
 			p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x10, 0x23, 0x28, 0x2B:
+		0x10, 0x28, 0x2B:
 			p += 1
 			th.pc = p
+		0x23: # MovieCtrl (Game.exe 0x458fc0: 等待视频结束或执行收尾指令)
+			var _sub := _rd_u8(data, p); p += 1
+			th.pc = p
+			if _movie_playing:
+				th.wait_mode = WaitMode.MOVIE
 		_:
 			th.pc = p
 

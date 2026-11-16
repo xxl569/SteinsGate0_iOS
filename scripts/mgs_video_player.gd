@@ -4,7 +4,7 @@ extends CanvasLayer
 
 signal movie_finished(movie_idx: int, skipped: bool)
 
-const SKIP_DEBOUNCE_SEC := 0.35
+const SKIP_DEBOUNCE_SEC := 0.85
 
 var _vfs: MgsVfs = null
 var _vm: Sc3Vm = null

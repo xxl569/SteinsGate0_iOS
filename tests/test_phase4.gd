@@ -36,8 +36,12 @@ func _run() -> void:
 
 	# 验证 Start New Game -> SG0_00_01 推进与 UI 面板开关
 	main_node.start_new_game()
-	for _i in range(300):
+	for _i in range(1800):
 		main_node.vm.step_frame(1)
+		if main_node.video.is_movie_playing():
+			main_node.video.stop_movie(true)
+		elif main_node.vm.is_waiting_for_movie():
+			main_node.vm.notify_movie_finished()
 		if main_node.vm.is_waiting_for_click():
 			break
 	assert(main_node.panels._body_renderer.get_glyphs_count() > 0 or not main_node.vm.backlog.is_empty(), "对白未渲染")

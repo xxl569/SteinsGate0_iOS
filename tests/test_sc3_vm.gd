@@ -47,8 +47,10 @@ func _run() -> void:
 	)
 
 	assert(vm.jump_to_script("SG0_00_01.scx", 0), "SG0_00_01.scx 跳转失败")
-	for _step in range(500):
+	for _step in range(1800):
 		vm.step_frame(1)
+		if vm.is_waiting_for_movie() or vm._movie_playing:
+			vm.notify_movie_finished()
 		if vm.is_waiting_for_click():
 			vm.notify_user_advance()
 		if got_dialogues.size() >= 15:

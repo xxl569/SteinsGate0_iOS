@@ -16,6 +16,8 @@ var _cfg: ConfigManager = null
 var _bgm_player: AudioStreamPlayer = null
 var _voice_player: AudioStreamPlayer = null
 var _se_pool: Array[AudioStreamPlayer] = []
+var _se_pool_ids: Array[int] = []
+var _se_last_ms: Dictionary = {}
 var _se_cursor: int = 0
 
 var _bgm_loop_enabled: bool = false
@@ -63,6 +65,7 @@ func _ensure_players() -> void:
 		p.bus = BUS_SE
 		add_child(p)
 		_se_pool.append(p)
+		_se_pool_ids.append(-1)
 
 
 func bind_vfs(vfs: MgsVfs) -> void:
@@ -181,6 +184,8 @@ func play_bgm(bgm_idx: int, loop: bool = true, fade_frames: int = 0) -> bool:
 	_ensure_players()
 	if _vfs == null or not _vfs.is_mounted or bgm_idx < 0:
 		return false
+	if _current_bgm_idx == bgm_idx and _bgm_player.playing:
+		return true
 	var entry_name := _vfs.get_entry_name_by_index("bgm.mpk", bgm_idx)
 	if entry_name == "":
 		return false
@@ -261,6 +266,17 @@ func play_se(se_idx: int, loop: bool = false) -> bool:
 	_ensure_players()
 	if _vfs == null or not _vfs.is_mounted or se_idx < 0:
 		return false
+	# 防止循环音效在同一槽位重复叠加触发引起高频爆音/蜂鸣
+	if loop:
+		for i in range(_se_pool.size()):
+			if _se_pool_ids[i] == se_idx and _se_pool[i].playing:
+				return true
+	else:
+		var now_ms := Time.get_ticks_msec()
+		if _se_last_ms.has(se_idx) and now_ms - int(_se_last_ms[se_idx]) < 35:
+			return true
+		_se_last_ms[se_idx] = now_ms
+
 	var entry_name := _vfs.get_entry_name_by_index("se.mpk", se_idx)
 	if entry_name == "":
 		return false
@@ -272,20 +288,24 @@ func play_se(se_idx: int, loop: bool = false) -> bool:
 		return false
 	stream.loop = loop
 
-	var player: AudioStreamPlayer = _se_pool[_se_cursor % _se_pool.size()]
+	var slot_idx := _se_cursor % _se_pool.size()
+	var player: AudioStreamPlayer = _se_pool[slot_idx]
 	_se_cursor += 1
 	player.stop()
 	player.stream = stream
+	_se_pool_ids[slot_idx] = se_idx
 	player.play()
 	return true
 
 
 func stop_se(channel: int = -1) -> void:
 	if channel < 0:
-		for p in _se_pool:
-			p.stop()
+		for i in range(_se_pool.size()):
+			_se_pool[i].stop()
+			_se_pool_ids[i] = -1
 	elif channel < _se_pool.size():
 		_se_pool[channel].stop()
+		_se_pool_ids[channel] = -1
 
 
 func _resolve_voice_char_slot(entry_name: String, fallback_char_id: int) -> int:

@@ -66,8 +66,10 @@ func _run() -> void:
 			vm.step_frame(1)
 		assert(vm.jump_to_script(sname, 0), "跳转剧本失败: " + sname)
 		var local_clicks := 0
-		for _step in range(360):
+		for _step in range(1800):
 			vm.step_frame(1)
+			if vm.is_waiting_for_movie() or vm._movie_playing:
+				vm.notify_movie_finished()
 			if vm.is_waiting_for_click():
 				local_clicks += 1
 				vm.notify_user_advance()
@@ -113,6 +115,51 @@ func _run() -> void:
 	print("Cache after on_low_memory(): used_bytes=%d (max_allowed=%d)" % [after_low, max_after_low])
 	assert(after_low <= max_after_low, "低内存回收后仍超过 40%% 上限: %d" % after_low)
 
+	stage.reset_stage()
+
+	# 5. AV 与立绘防回归专项校验（真实 BGM 25 / 无 0018 重复 SE 爆音 / 0033 开场计时等待 / 视频表 IMV008 / 立绘静止不跳动）
+	var audio_chk := MgsAudioMgr.new()
+	get_root().add_child(audio_chk)
+	audio_chk.bind_vfs(vfs)
+	audio_chk.apply_config(cfg)
+	assert(vfs.get_movie_path_by_index(11).get_file().to_lower() == "imv008.ogv", "视频表索引 11 应固定映射 IMV008.ogv")
+	var vm_av := Sc3Vm.new(vfs)
+	var av_bgms: Array[int] = []
+	var av_ses: Array[int] = []
+	var av_movies: Array[int] = []
+	vm_av.bgm_play_requested.connect(func(idx: int, _lp: bool, _fd: int): av_bgms.append(idx))
+	vm_av.se_play_requested.connect(func(idx: int, _lp: bool): av_ses.append(idx))
+	vm_av.movie_play_requested.connect(func(idx: int): av_movies.append(idx))
+	vm_av.start_boot_script()
+	for _f in range(15):
+		vm_av.step_frame(1)
+	assert(av_ses.is_empty(), "启动阶段不应再因 0x0018 误触重复 SE 爆音，实际: %s" % [str(av_ses)])
+	assert(vm_av.jump_to_script("SG0_00_01.scx", 0), "AV 校验跳转 SG0_00_01 失败")
+	var dlg_tick := -1
+	for tk in range(1500):
+		vm_av.step_frame(1)
+		if vm_av.is_waiting_for_movie() or vm_av._movie_playing:
+			vm_av.notify_movie_finished()
+		if vm_av.is_waiting_for_click():
+			dlg_tick = tk
+			break
+	assert(dlg_tick >= 200, "开场 0x0033 过场等待应正常生效（>=200帧），实际仅: %d" % dlg_tick)
+	assert(av_bgms.has(25), "SG0_00_01 开场应通过 0x0021 触发 BGM 25 (bgm213.ogg)，实际: %s" % [str(av_bgms)])
+	assert(av_ses.size() <= 5, "SG0_00_01 开场 SE 触发次数异常过多: %s" % [str(av_ses)])
+	assert(av_movies.has(11), "SG0_00_01 开场应触发 IMV008 (idx=11)")
+	# 检查 MgsStage 立绘绝对静止（无垂直 sin 呼吸抖动与口型 Y 轴拉伸）
+	assert(stage.load_chara(16, 674, 3), "加载测试立绘失败")
+	var sp_chk: Sprite2D = stage._chara_slots[16]["sprite"]
+	var y_before := sp_chk.position.y
+	var s_before := sp_chk.scale
+	stage._process(0.45)
+	stage.update_lip_sync(2)
+	assert(absf(sp_chk.position.y - y_before) < 0.001, "立绘不应出现垂直跳动")
+	assert(sp_chk.scale == s_before and sp_chk.scale == MgsStage.CHARA_DISPLAY_SCALE, "立绘不应在说话时发生拉伸变形")
+	print("AV & static portrait parity ok: dlg_tick=%d bgms=%s ses=%s movies=%s" % [dlg_tick, str(av_bgms), str(av_ses), str(av_movies)])
+	audio_chk.stop_bgm(0)
+	audio_chk.stop_se(-1)
+	audio_chk.queue_free()
 	stage.reset_stage()
 	stage.queue_free()
 	print("=== Phase 5.1 Verification PASSED ===")

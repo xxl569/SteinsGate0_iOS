@@ -6,6 +6,7 @@ signal stage_updated()
 
 const STAGE_WIDTH := 1920.0
 const STAGE_HEIGHT := 1080.0
+const CHARA_DISPLAY_SCALE := Vector2(0.84, 0.84)
 const MASK_WIPE_SHADER := preload("res://assets/shaders/mask_wipe.gdshader")
 
 var _vfs: MgsVfs = null
@@ -118,23 +119,9 @@ func reset_stage() -> void:
 		_wipe_overlay.texture = null
 
 
-func _process(delta: float) -> void:
-	_blink_elapsed += delta
-	# 轻量级待机呼吸/眨眼节律更新，不依赖额外纹理切换
-	if not _chara_slots.is_empty():
-		var phase := fmod(_blink_elapsed, 4.5)
-		for slot_id in _chara_slots.keys():
-			var info: Dictionary = _chara_slots[slot_id]
-			var sp := info["sprite"] as Sprite2D
-			if is_instance_valid(sp) and sp.visible:
-				var offset_phase := fmod(phase + float(int(slot_id)) * 0.7, 4.5)
-				var breath := sin(_blink_elapsed * 1.4 + float(int(slot_id))) * 1.5
-				var base_y := float(info.get("base_y", STAGE_HEIGHT * 0.5))
-				sp.position.y = base_y + breath
-				if offset_phase > 4.35:
-					sp.modulate.a = 0.96
-				else:
-					sp.modulate.a = float(info.get("alpha", 1.0))
+func _process(_delta: float) -> void:
+	# PC 原版角色立绘在剧情期间保持静止稳定，不做垂直晃动或缩放跳动
+	pass
 
 
 func _load_cached_texture(cache_key: String, archive: String, entry_name: String) -> Texture2D:
@@ -332,7 +319,7 @@ func load_chara(slot: int, chara_idx: int, group_hint: int = 0) -> bool:
 
 	sp.texture = tex
 	sp.visible = true
-	sp.scale = Vector2(0.84, 0.84)
+	sp.scale = CHARA_DISPLAY_SCALE
 	var base_y := STAGE_HEIGHT * 0.60
 	sp.position = Vector2(STAGE_WIDTH * 0.5, base_y)
 
@@ -384,13 +371,16 @@ func get_chara_count() -> int:
 	return _chara_slots.size()
 
 
-func update_lip_sync(amplitude_level: int) -> void:
-	# 语音振幅映射到活跃立绘轻微口型震动反馈（0=闭, 1=半开, 2=全开）
-	var scale_bump := 1.0 + float(clampi(amplitude_level, 0, 2)) * 0.0025
+func update_lip_sync(_amplitude_level: int) -> void:
+	# 保持立绘缩放恒定（CHARA_DISPLAY_SCALE），避免角色说话时整张立绘上下跳动或拉伸
 	for slot_id in _chara_slots.keys():
 		var sp := _chara_slots[slot_id]["sprite"] as Sprite2D
 		if is_instance_valid(sp) and sp.visible:
-			sp.scale = Vector2(1.0, scale_bump)
+			if sp.scale != CHARA_DISPLAY_SCALE:
+				sp.scale = CHARA_DISPLAY_SCALE
+			var base_y := float(_chara_slots[slot_id].get("base_y", STAGE_HEIGHT * 0.60))
+			if absf(sp.position.y - base_y) > 0.01:
+				sp.position.y = base_y
 
 
 func play_mask_wipe(mask_id: int, duration_frames: int = 30) -> void:

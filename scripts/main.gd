@@ -24,6 +24,7 @@ var _auto_timer: float = 0.0
 var _skip_timer: float = 0.0
 var _line_read_flag: bool = false
 var _play_time_sec: float = 0.0
+var _sc3_frame_accum: float = 0.0
 var _pending_save_thumb: Image = null
 
 var _cli_game_dir: String = ""
@@ -216,7 +217,7 @@ func _mount_and_boot() -> void:
 			panels.show_dialogue_mode()
 			gesture_helper.set_dialogue_mode(true)
 			var clicks_left := _cli_advance_clicks
-			for _s in range(600):
+			for _s in range(2400):
 				vm.step_frame(1)
 				if _cli_skip_movies and video.is_movie_playing():
 					video.stop_movie(true)
@@ -275,6 +276,7 @@ func start_new_game() -> void:
 	_auto_mode = false
 	_skip_mode = false
 	_play_time_sec = 0.0
+	_sc3_frame_accum = 0.0
 	_update_mode_indicators()
 	stage.reset_stage()
 	vm.start_boot_script()
@@ -335,7 +337,12 @@ func _process(delta: float) -> void:
 		else:
 			return
 
-	vm.step_frame(1)
+	# 以 60fps 为基准折算 SC3 帧步进，避免 iPhone 120Hz ProMotion 下开场动画 2 倍速闪过
+	_sc3_frame_accum = minf(_sc3_frame_accum + delta * 60.0, 4.0)
+	var sc3_frames := int(_sc3_frame_accum)
+	if sc3_frames > 0:
+		_sc3_frame_accum -= float(sc3_frames)
+		vm.step_frame(sc3_frames)
 
 	# 实时口型驱动
 	stage.update_lip_sync(audio.get_voice_mouth_level())

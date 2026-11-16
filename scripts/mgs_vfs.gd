@@ -10,6 +10,18 @@ const FONT_A_SLOTS := 5440 # 64 * 85
 const FONT_B_SLOTS := 2560 # 64 * 40
 const TOTAL_GLYPH_SLOTS := 8000
 
+# Game.exe 0xd29838 原版视频索引映射表（33 部，大小写无关按文件名 stem 匹配）
+const MOVIE_TABLE_STEMS := [
+	"end01", "end02", "end03", "end04",
+	"imv001", "imv002", "imv003", "imv004", "imv005", "imv006",
+	"imv007", "imv008", "imv009", "imv010", "imv011", "imv012",
+	"op",
+	"tit_000", "tit_001", "tit_a01", "tit_a02", "tit_a03", "tit_a04",
+	"tit_b01", "tit_b02", "tit_b03a", "tit_b03b", "tit_b04",
+	"tit_k01", "tit_m01", "tit_t01",
+	"anisama", "intro",
+]
+
 var native: Object = null # MgsNative 实例
 var is_mounted: bool = false
 var active_game_dir: String = ""
@@ -20,6 +32,7 @@ var _font_widths_raw: PackedByteArray = PackedByteArray()
 var _font_widths_loaded: bool = false
 var _archive_index_cache: Dictionary = {} # archive_lower -> PackedStringArray
 var _sorted_movie_files: PackedStringArray = PackedStringArray()
+var _movie_by_stem: Dictionary = {} # stem_lower -> filename
 
 
 func _init() -> void:
@@ -168,6 +181,9 @@ func _scan_movie_dir(d: String) -> bool:
 		return false
 	ogvs.sort()
 	_sorted_movie_files = PackedStringArray(ogvs)
+	_movie_by_stem.clear()
+	for fn in ogvs:
+		_movie_by_stem[fn.get_basename().to_lower()] = fn
 	active_movie_dir = d
 	return true
 
@@ -175,6 +191,7 @@ func _scan_movie_dir(d: String) -> bool:
 func _detect_movie_dir(config: ConfigManager) -> void:
 	active_movie_dir = ""
 	_sorted_movie_files = PackedStringArray()
+	_movie_by_stem.clear()
 	for d in get_candidate_movie_dirs(config):
 		if _scan_movie_dir(d):
 			return
@@ -206,9 +223,15 @@ func get_archive_entry_count(archive: String) -> int:
 
 
 func get_movie_path_by_index(idx: int) -> String:
-	if active_movie_dir == "" or idx < 0 or idx >= _sorted_movie_files.size():
+	if active_movie_dir == "" or idx < 0:
 		return ""
-	return active_movie_dir.path_join(_sorted_movie_files[idx])
+	if idx < MOVIE_TABLE_STEMS.size():
+		var stem := str(MOVIE_TABLE_STEMS[idx])
+		if _movie_by_stem.has(stem):
+			return active_movie_dir.path_join(str(_movie_by_stem[stem]))
+	if idx < _sorted_movie_files.size():
+		return active_movie_dir.path_join(_sorted_movie_files[idx])
+	return ""
 
 
 func get_movie_names() -> PackedStringArray:
