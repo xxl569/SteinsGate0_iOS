@@ -353,8 +353,14 @@ func _run() -> void:
 		"阿万音由季(10)->avatar 9, 椎名篝(9)->avatar 10 索引必须正确")
 	_check(pd_chk._amadeus_btn != null and not pd_chk._amadeus_btn.visible,
 		"序章初始桌面不应显示未解锁的 Amadeus 图标")
-	pd_chk._on_rine_event(13, [10, 11])
+	pd_chk._on_rine_event(13, [10, 1])
+	pd_chk._on_rine_event(13, [11, 2])
 	_check(pd_chk._reply_options.size() == 2, "RINE subop=13 应注册 2 个候选回复")
+	pd_chk._on_rine_event(43, [7])
+	pd_chk._on_rine_event(46, [7, 0, 0])
+	pd_chk._on_rine_event(46, [7, 1, 10])
+	_check(pd_chk._active_contact_idx == 7 and pd_chk._messages_by_contact.get(7, []).size() == 2,
+		"RINE subop=43/46 应将铃羽(7)的消息与贴纸记录到铃羽线程")
 	pd_chk._toggle_reply_tray()
 	_check(pd_chk._reply_panel.visible and pd_chk._reply_list.get_child_count() == 2,
 		"点击输入栏应弹出 2 个真实候选回复选项")

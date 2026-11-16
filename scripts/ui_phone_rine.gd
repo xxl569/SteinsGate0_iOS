@@ -63,6 +63,7 @@ var _screen_root: Control = null
 var _xp_bar_tex: TextureRect = null
 var _hw_nav_tex: TextureRect = null
 var _home_wallpaper: TextureRect = null
+var _amadeus_overlay: ColorRect = null
 var _amadeus_logo: TextureRect = null
 var _msg_list: VBoxContainer = null
 var _msg_scroll: ScrollContainer = null
@@ -217,29 +218,45 @@ func _ensure_ui() -> void:
 	# 确保顶栏在子页面之上
 	_screen_root.move_child(top_bar, _screen_root.get_child_count() - 1)
 
-	# 6. Amadeus 来电浮层（仅实际触发时显示）
+	# 6. Amadeus 来电浮层（带半透明遮罩防止底层电话簿/桌面文字透出与误触）
+	_amadeus_overlay = ColorRect.new()
+	_amadeus_overlay.name = "AmadeusCallOverlay"
+	_amadeus_overlay.position = Vector2(SCREEN_X, SCREEN_Y + TOP_BAR_H)
+	_amadeus_overlay.size = Vector2(SCREEN_W, BODY_H)
+	_amadeus_overlay.color = Color(0.03, 0.05, 0.10, 0.94)
+	_amadeus_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_amadeus_overlay.visible = false
+	_drawer.add_child(_amadeus_overlay)
+
 	_amadeus_logo = TextureRect.new()
-	_amadeus_logo.position = Vector2(165, 220)
+	_amadeus_logo.position = Vector2((SCREEN_W - 360.0) * 0.5, 90.0)
 	_amadeus_logo.size = Vector2(360, 180)
 	_amadeus_logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_amadeus_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_amadeus_logo.visible = false
-	_drawer.add_child(_amadeus_logo)
+	_amadeus_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_amadeus_overlay.add_child(_amadeus_logo)
+
+	var call_lbl := Label.new()
+	call_lbl.text = "Amadeus · 牧濑 红莉栖\n来电中..."
+	call_lbl.position = Vector2(20.0, 275.0)
+	call_lbl.size = Vector2(SCREEN_W - 40.0, 56.0)
+	call_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	call_lbl.add_theme_font_size_override("font_size", 19)
+	call_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55, 1.0))
+	_amadeus_overlay.add_child(call_lbl)
 
 	_connect_bar = HBoxContainer.new()
-	_connect_bar.position = Vector2(145, 420)
+	_connect_bar.position = Vector2((SCREEN_W - 400.0) * 0.5, 355.0)
 	_connect_bar.size = Vector2(400, 48)
 	_connect_bar.alignment = BoxContainer.ALIGNMENT_CENTER
 	_connect_bar.add_theme_constant_override("separation", 18)
-	_connect_bar.visible = false
-	_drawer.add_child(_connect_bar)
+	_amadeus_overlay.add_child(_connect_bar)
 
 	var btn_conn := Button.new()
 	btn_conn.text = "接听 CONNECT"
 	btn_conn.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(false))
 	btn_conn.pressed.connect(func():
-		_connect_bar.visible = false
-		_amadeus_logo.visible = false
+		_amadeus_overlay.visible = false
 		_stop_ringtone()
 		amadeus_action.emit(true)
 	)
@@ -247,8 +264,7 @@ func _ensure_ui() -> void:
 	btn_cancel.text = "挂断 CANCEL"
 	btn_cancel.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(true))
 	btn_cancel.pressed.connect(func():
-		_connect_bar.visible = false
-		_amadeus_logo.visible = false
+		_amadeus_overlay.visible = false
 		_stop_ringtone()
 		amadeus_action.emit(false)
 	)
@@ -905,6 +921,13 @@ func _populate_sticker_tray() -> void:
 		_sticker_grid.add_child(btn)
 
 
+func _has_contact(cid: int) -> bool:
+	for c in CONTACT_DEFS:
+		if int(c["id"]) == cid:
+			return true
+	return false
+
+
 func _get_contact_def(cid: int) -> Dictionary:
 	for c in CONTACT_DEFS:
 		if int(c["id"]) == cid:
@@ -1163,41 +1186,48 @@ func _on_phone_event(subop: int, args: Array) -> void:
 	if subop == 1 or (subop == 10 and args.size() >= 1 and int(args[0]) == 1):
 		unlock_amadeus()
 		_status_label.text = "Amadeus"
-		_amadeus_logo.visible = _amadeus_logo.texture != null
-		_connect_bar.visible = true
+		if _amadeus_overlay != null:
+			_amadeus_overlay.visible = true
 		if _audio != null:
 			var rt_idx: int = _config.phone_ringtone_idx if _config != null else 0
 			_audio.play_se_by_name("SGSE%d.ogg" % (700 + clampi(rt_idx, 0, RINGTONE_NAMES.size() - 1)), true)
 	elif subop == 255 or subop == 5:
-		_amadeus_logo.visible = false
-		_connect_bar.visible = false
+		if _amadeus_overlay != null:
+			_amadeus_overlay.visible = false
 		_stop_ringtone()
 		switch_screen(_current_screen, false)
 
 
 func _on_rine_event(subop: int, args: Array) -> void:
-	# 依据 _rndrine.scx:
-	# 0x00 = RINE 会话初始化 (非聊天消息), 0x0c = 切换当前联系人, 0x0d = 注册可回复项,
-	# 0x0f (15) / 0x2e (46) = 追加消息 (side[0=己方,1=对方], type[0=文本ID,1=贴纸ID], payload_id)
+	# 依据 _rndrine.scx 与 SG0_01_01.scx 实测字节码:
+	# 0x00 = RINE 会话初始化 (非聊天消息)
+	# 0x0c (12) / 0x2b (43) = 切换当前聊天对象联系人
+	# 0x0d (13) = 注册单条可回复项 (args[0]=_phone.scx 字符串ID, args[1]=槽位序号)
+	# 0x0f (15) = 追加消息 (args[0]=0己方/1对方, args[1]=0文本/1贴纸, args[2]=payload_id)
+	# 0x2e (46) = 追加指定角色消息 (args[0]=0己方/联系人ID, args[1]=0文本/1贴纸, args[2]=payload_id)
 	if subop == 0:
 		return
-	elif subop == 12:
+	elif subop == 12 or subop == 43:
 		if args.size() > 0:
 			var raw_cid := int(args[0])
-			_active_contact_idx = clampi(raw_cid, 0, CONTACT_DEFS.size() - 1)
-			unlock_contact(_active_contact_idx)
-			_refresh_chat_header()
+			if _has_contact(raw_cid):
+				_active_contact_idx = raw_cid
+				unlock_contact(_active_contact_idx)
+				_refresh_chat_header()
 	elif subop == 13:
-		for a in args:
-			var opt_id := int(a)
+		if args.size() >= 1:
+			var opt_id := int(args[0])
 			if opt_id > 0 and opt_id < _phone_offsets.size() and not _reply_options.has(opt_id):
 				_reply_options.append(opt_id)
 		_refresh_reply_prompt()
 	elif subop == 15 or subop == 46:
-		var side := int(args[0]) if args.size() > 0 else 1
+		var side_or_cid := int(args[0]) if args.size() > 0 else 1
 		var msg_type := int(args[1]) if args.size() > 1 else 0
 		var payload_id := int(args[2]) if args.size() > 2 else -1
-		var is_self := (side == 0)
+		var is_self := (side_or_cid == 0)
+		if subop == 46 and not is_self and _has_contact(side_or_cid) and _active_contact_idx != side_or_cid:
+			_active_contact_idx = side_or_cid
+			_refresh_chat_header()
 		unlock_contact(_active_contact_idx)
 		if msg_type == 1:
 			if payload_id >= 0 and payload_id < _stickers.size():
@@ -1348,6 +1378,8 @@ func _rebuild_chat_for_active_contact() -> void:
 func reset_phone_state() -> void:
 	_active_contact_idx = 1
 	_amadeus_unlocked = false
+	if _amadeus_overlay != null:
+		_amadeus_overlay.visible = false
 	_unlocked_contacts = {0: true, 1: true, 2: true, 5: true, 6: true, 7: true, 10: true}
 	_messages.clear()
 	_messages_by_contact.clear()
