@@ -181,6 +181,7 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader) -> void:
 
 func _populate_sticker_tray() -> void:
 	for c in _sticker_grid.get_children():
+		_sticker_grid.remove_child(c)
 		c.queue_free()
 	for i in range(_stickers.size()):
 		var tex := _stickers[i]

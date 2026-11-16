@@ -1,6 +1,6 @@
 class_name MobileGestureHelper
 extends Control
-## iOS 移动端触控交互、刘海屏安全区适配与悬浮快捷栏（含点击即停 Auto/Skip 机制）
+## iOS 移动端触控交互、刘海屏安全区适配与左上角悬浮快捷栏（避免与右上角返回/收起键重叠）
 
 signal advance_requested()
 signal toggle_skip_requested()
@@ -17,6 +17,7 @@ signal toggle_hide_ui_requested()
 var is_auto_active: bool = false
 var is_skip_active: bool = false
 var is_dialogue_mode: bool = false
+var is_modal_blocked: bool = false
 
 var _hud_container: HBoxContainer = null
 var _btn_skip: Button = null
@@ -32,20 +33,28 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_hud()
 	_apply_safe_area()
+	if get_viewport() != null and not get_viewport().size_changed.is_connected(_apply_safe_area):
+		get_viewport().size_changed.connect(_apply_safe_area)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_SIZE_CHANGED:
+		_apply_safe_area()
 
 
 func _build_hud() -> void:
 	_hud_container = HBoxContainer.new()
 	_hud_container.name = "FloatingHudBar"
-	_hud_container.alignment = BoxContainer.ALIGNMENT_END
-	_hud_container.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_hud_container.alignment = BoxContainer.ALIGNMENT_BEGIN
+	_hud_container.grow_horizontal = Control.GROW_DIRECTION_END
 	_hud_container.add_theme_constant_override("separation", 6)
-	_hud_container.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_hud_container.offset_left = -960
+	_hud_container.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_hud_container.offset_left = 20
 	_hud_container.offset_top = 14
-	_hud_container.offset_right = -24
+	_hud_container.offset_right = 980
 	_hud_container.offset_bottom = 60
 	_hud_container.mouse_filter = Control.MOUSE_FILTER_PASS
+	_hud_container.visible = false
 	add_child(_hud_container)
 
 	_btn_skip = _make_hud_btn("快进 SKIP", func(): toggle_skip_requested.emit())
@@ -77,8 +86,17 @@ func _make_hud_btn(label_text: String, cb: Callable) -> Button:
 
 func set_dialogue_mode(enabled: bool) -> void:
 	is_dialogue_mode = enabled
+	_sync_hud_visibility()
+
+
+func set_modal_blocked(blocked: bool) -> void:
+	is_modal_blocked = blocked
+	_sync_hud_visibility()
+
+
+func _sync_hud_visibility() -> void:
 	if _hud_container != null:
-		_hud_container.visible = enabled
+		_hud_container.visible = is_dialogue_mode and not is_modal_blocked
 
 
 func set_mode_states(auto_on: bool, skip_on: bool) -> void:
@@ -98,15 +116,15 @@ func _apply_safe_area() -> void:
 	if win_sz.x <= 0 or win_sz.y <= 0:
 		return
 	var top_pad := maxi(14, int(float(safe.position.y) * (1080.0 / float(win_sz.y))) + 8)
-	var right_inset := maxi(24, int(float(win_sz.x - (safe.position.x + safe.size.x)) * (1920.0 / float(win_sz.x))) + 16)
-	_hud_container.offset_left = -960 - right_inset
+	var left_inset := maxi(20, int(float(safe.position.x) * (1920.0 / float(win_sz.x))) + 14)
+	_hud_container.offset_left = left_inset
 	_hud_container.offset_top = top_pad
-	_hud_container.offset_right = -right_inset
+	_hud_container.offset_right = left_inset + 980
 	_hud_container.offset_bottom = top_pad + 46
 
 
 func _input(event: InputEvent) -> void:
-	if not is_dialogue_mode or not visible:
+	if not is_dialogue_mode or is_modal_blocked or not visible:
 		return
 	# 当处于 Auto 或 Skip 状态且点击在非 HUD 按钮区域时，按下瞬间先解除自动/快进（不直接触发误推进）
 	var is_press := false

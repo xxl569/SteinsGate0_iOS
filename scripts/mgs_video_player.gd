@@ -66,6 +66,14 @@ func bind_vm(vm: Sc3Vm) -> void:
 		_vm.movie_play_requested.connect(play_movie)
 
 
+func apply_config(cfg: ConfigManager) -> void:
+	_ensure_ui()
+	if cfg == null or _player == null:
+		return
+	var v := clampf(cfg.movie_volume, 0.0, 1.0)
+	_player.volume_db = -80.0 if v <= 0.001 else linear_to_db(v)
+
+
 func _process(delta: float) -> void:
 	if _is_playing:
 		_play_elapsed += delta

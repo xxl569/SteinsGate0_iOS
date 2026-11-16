@@ -12,6 +12,7 @@ const BUS_SE := &"SE"
 const BUS_VOICE := &"Voice"
 
 var _vfs: MgsVfs = null
+var _cfg: ConfigManager = null
 var _bgm_player: AudioStreamPlayer = null
 var _voice_player: AudioStreamPlayer = null
 var _se_pool: Array[AudioStreamPlayer] = []
@@ -98,6 +99,7 @@ func get_wavtable_size() -> int:
 func apply_config(cfg: ConfigManager) -> void:
 	if cfg == null:
 		return
+	_cfg = cfg
 	ensure_buses()
 	_set_bus_linear(BUS_BGM, cfg.bgm_volume)
 	_set_bus_linear(BUS_SE, cfg.se_volume)
@@ -286,13 +288,54 @@ func stop_se(channel: int = -1) -> void:
 		_se_pool[channel].stop()
 
 
-func play_voice(voice_idx: int, _char_id: int = 0) -> bool:
+func _resolve_voice_char_slot(entry_name: String, fallback_char_id: int) -> int:
+	var stem := entry_name.get_basename().to_upper()
+	var parts := stem.split("_")
+	# 从右向左扫描分段，兼容 *_K.ogg（电话滤音版）等尾部后缀
+	for idx in range(parts.size() - 1, -1, -1):
+		var tag := parts[idx]
+		var code := ""
+		for i in range(tag.length()):
+			var ch := tag[i]
+			if ch >= "A" and ch <= "Z":
+				code += ch
+			else:
+				break
+		match code:
+			"OKA", "OKM": return 1
+			"MAY", "SMY": return 2
+			"DAR": return 3
+			"CRS": return 4
+			"MOE": return 5
+			"RUK": return 6
+			"FEI": return 7
+			"SUZ": return 8
+			"NAE": return 9
+			"TEN": return 10
+			"MAH": return 11
+			"YUK": return 12
+			"KAG": return 13
+			"REI", "RDA", "IZK": return 0
+			"FUB", "KAE", "EXA", "EXB", "EXC", "EXE", "EXF", "EXH", "EXJ", "EXM", "EXP", "EXR", "EXT", "EXW", "EXY": return 15
+			"ETA", "ETB", "EXD", "EXG", "EXI", "EXL", "EXN", "EXO", "EXQ", "EXS", "EXU", "EXV", "EXX", "EXZ", "GOS", "HMN", "KRK", "NAK", "RES", "URP": return 14
+	if fallback_char_id >= 0 and fallback_char_id < ConfigManager.VOICE_CHAR_COUNT:
+		return fallback_char_id
+	return 14
+
+
+func play_voice(voice_idx: int, char_id: int = 0) -> bool:
 	_ensure_players()
 	if _vfs == null or not _vfs.is_mounted or voice_idx <= 0:
 		return false
 	var entry_name := _vfs.get_entry_name_by_index("voice.mpk", voice_idx)
 	if entry_name == "" or entry_name.to_lower().begins_with("_novoice"):
 		return false
+	var char_gain := 1.0
+	if _cfg != null:
+		var slot := _resolve_voice_char_slot(entry_name, char_id)
+		char_gain = _cfg.get_char_voice_gain(slot)
+		if char_gain <= 0.001:
+			return false
 	var raw := _vfs.read_entry("voice.mpk", entry_name)
 	if raw.is_empty():
 		return false
@@ -301,6 +344,7 @@ func play_voice(voice_idx: int, _char_id: int = 0) -> bool:
 		return false
 	_voice_player.stop()
 	_voice_player.stream = stream
+	_voice_player.volume_db = linear_to_db(maxf(0.001, char_gain))
 	_voice_elapsed = 0.0
 	_voice_player.play()
 	voice_started.emit(entry_name)

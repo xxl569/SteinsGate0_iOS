@@ -171,6 +171,7 @@ func _switch_tab(tab_idx: int) -> void:
 
 func _populate_cgs() -> void:
 	for c in _cg_grid.get_children():
+		_cg_grid.remove_child(c)
 		c.queue_free()
 	if _vfs == null or not _vfs.is_mounted:
 		return

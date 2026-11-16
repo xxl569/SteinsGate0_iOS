@@ -1,6 +1,6 @@
 class_name UiPanels
 extends Control
-## MAGES. 主 UI 面板集合（标题画面 / 对话框与分支选项 / 历史回顾 / 存档读档 / 系统设置 / BYOA 引导）
+## MAGES. 主 UI 面板集合（标题画面 / 对话框与分支选项 / 1:1 PC 历史回放 / 存档读档 / 系统设置 / BYOA 引导）
 
 signal new_game_requested()
 signal continue_game_requested()
@@ -9,13 +9,15 @@ signal tips_requested()
 signal advance_dialogue_requested()
 signal choice_selected(index: int)
 signal voice_replay_requested(voice_idx: int)
+signal voice_replay_with_char_requested(voice_idx: int, char_id: int)
 signal save_slot_requested(slot_id: int)
 signal load_slot_requested(slot_id: int)
 signal retry_byoa_requested()
 signal config_applied()
+signal modal_visibility_changed(any_open: bool)
 
 const SAVE_DIR := "user://saves"
-const NUM_SAVE_SLOTS := 12
+const NUM_SAVE_SLOTS := 48
 
 var _vfs: MgsVfs = null
 var _vm: Sc3Vm = null
@@ -39,26 +41,15 @@ var _choices_panel: PanelContainer = null
 var _choices_box: VBoxContainer = null
 
 var _modal_layer: Control = null
-var _backlog_view: Control = null
-var _backlog_bg: TextureRect = null
-var _backlog_list: VBoxContainer = null
-
-var _saveload_view: Control = null
-var _saveload_bg: TextureRect = null
-var _saveload_title: Label = null
-var _saveload_grid: GridContainer = null
-var _saveload_is_save: bool = true
-
-var _config_view: Control = null
-var _config_bg: TextureRect = null
-var _slider_bgm: HSlider = null
-var _slider_se: HSlider = null
-var _slider_voice: HSlider = null
-var _slider_speed: HSlider = null
-var _chk_unread: CheckButton = null
+var _backlog_view: UiBacklogPanel = null
+var _saveload_view: UiSaveloadPanel = null
+var _config_view: UiConfigPanel = null
 
 var _byoa_view: Control = null
 var _byoa_detail: Label = null
+var _tips_toast: PanelContainer = null
+var _tips_toast_label: Label = null
+var _tips_toast_timer: float = 0.0
 
 var _built: bool = false
 var _ui_hidden: bool = false
@@ -79,6 +70,12 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, cfg: ConfigManager, loader: UiThemeLoader) ->
 	_theme_loader = loader
 	_ensure_ui()
 	_bind_textures_and_renderers()
+	if _config_view != null:
+		_config_view.setup(_cfg, _theme_loader)
+	if _saveload_view != null:
+		_saveload_view.setup(_theme_loader)
+	if _backlog_view != null:
+		_backlog_view.setup(_vfs, _vm, _theme_loader)
 	refresh_title_status()
 
 
@@ -251,130 +248,36 @@ func _build_modal_layer() -> void:
 	_modal_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_modal_layer)
 
-	# 1. Backlog 面板
-	_backlog_view = Control.new()
-	_backlog_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_backlog_view.visible = false
+	# 1. PC 1:1 Backlog 面板
+	_backlog_view = UiBacklogPanel.new()
+	_backlog_view.voice_replay_requested.connect(func(vid: int): voice_replay_requested.emit(vid))
+	_backlog_view.voice_replay_with_char_requested.connect(func(vid: int, cid: int): voice_replay_with_char_requested.emit(vid, cid))
+	_backlog_view.closed.connect(_notify_modal_state)
 	_modal_layer.add_child(_backlog_view)
 
-	_backlog_bg = TextureRect.new()
-	_backlog_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_backlog_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_backlog_bg.stretch_mode = TextureRect.STRETCH_SCALE
-	_backlog_view.add_child(_backlog_bg)
-
-	var bl_dim := ColorRect.new()
-	bl_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bl_dim.color = Color(0.03, 0.03, 0.05, 0.80)
-	_backlog_view.add_child(bl_dim)
-
-	var bl_hdr := _make_modal_header("历史对话记录 BACKLOG", func(): _backlog_view.visible = false)
-	_backlog_view.add_child(bl_hdr)
-
-	var bl_scroll := ScrollContainer.new()
-	bl_scroll.position = Vector2(160, 110)
-	bl_scroll.size = Vector2(1600, 910)
-	_backlog_view.add_child(bl_scroll)
-
-	_backlog_list = VBoxContainer.new()
-	_backlog_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_backlog_list.add_theme_constant_override("separation", 10)
-	bl_scroll.add_child(_backlog_list)
-
-	# 2. Save / Load 面板
-	_saveload_view = Control.new()
-	_saveload_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_saveload_view.visible = false
+	# 2. PC 1:1 Save / Load 面板
+	_saveload_view = UiSaveloadPanel.new()
+	_saveload_view.save_slot_requested.connect(func(sid: int):
+		_notify_modal_state()
+		save_slot_requested.emit(sid)
+	)
+	_saveload_view.load_slot_requested.connect(func(sid: int):
+		_notify_modal_state()
+		load_slot_requested.emit(sid)
+	)
+	_saveload_view.closed.connect(_notify_modal_state)
 	_modal_layer.add_child(_saveload_view)
 
-	_saveload_bg = TextureRect.new()
-	_saveload_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_saveload_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_saveload_bg.stretch_mode = TextureRect.STRETCH_SCALE
-	_saveload_view.add_child(_saveload_bg)
-
-	var sl_dim := ColorRect.new()
-	sl_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	sl_dim.color = Color(0.04, 0.04, 0.06, 0.78)
-	_saveload_view.add_child(sl_dim)
-
-	var sl_top := HBoxContainer.new()
-	sl_top.position = Vector2(80, 34)
-	sl_top.size = Vector2(1760, 56)
-	_saveload_view.add_child(sl_top)
-	_saveload_title = Label.new()
-	_saveload_title.text = "存档 SAVE"
-	_saveload_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_saveload_title.add_theme_font_size_override("font_size", 32)
-	_saveload_title.modulate = Color(1.0, 0.65, 0.25)
-	sl_top.add_child(_saveload_title)
-	var sl_close := _make_small_btn("返回", func(): _saveload_view.visible = false)
-	sl_top.add_child(sl_close)
-
-	_saveload_grid = GridContainer.new()
-	_saveload_grid.position = Vector2(80, 120)
-	_saveload_grid.size = Vector2(1760, 880)
-	_saveload_grid.columns = 3
-	_saveload_grid.add_theme_constant_override("h_separation", 20)
-	_saveload_grid.add_theme_constant_override("v_separation", 20)
-	_saveload_view.add_child(_saveload_grid)
-
-	# 3. Config 面板
-	_config_view = Control.new()
-	_config_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_config_view.visible = false
+	# 3. PC 1:1 Config 面板
+	_config_view = UiConfigPanel.new()
+	_config_view.applied.connect(func(): config_applied.emit())
+	_config_view.closed.connect(_notify_modal_state)
 	_modal_layer.add_child(_config_view)
-
-	_config_bg = TextureRect.new()
-	_config_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_config_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_config_bg.stretch_mode = TextureRect.STRETCH_SCALE
-	_config_view.add_child(_config_bg)
-
-	var cf_dim := ColorRect.new()
-	cf_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	cf_dim.color = Color(0.03, 0.04, 0.06, 0.72)
-	_config_view.add_child(cf_dim)
-
-	_config_view.add_child(_make_modal_header("系统设置 CONFIG", func(): _config_view.visible = false))
-
-	var cf_card := PanelContainer.new()
-	cf_card.position = Vector2(420, 140)
-	cf_card.size = Vector2(1080, 760)
-	cf_card.add_theme_stylebox_override("panel", UiThemeLoader.make_dark_panel_style())
-	_config_view.add_child(cf_card)
-
-	var cf_box := VBoxContainer.new()
-	cf_box.add_theme_constant_override("separation", 24)
-	cf_card.add_child(cf_box)
-
-	_slider_bgm = _add_slider_row(cf_box, "BGM 音乐音量", 0.0, 1.0, 0.05)
-	_slider_se = _add_slider_row(cf_box, "SE 音效音量", 0.0, 1.0, 0.05)
-	_slider_voice = _add_slider_row(cf_box, "角色语音音量", 0.0, 1.0, 0.05)
-	_slider_speed = _add_slider_row(cf_box, "文字显示速度 (字/秒)", 20.0, 240.0, 10.0)
-
-	_chk_unread = CheckButton.new()
-	_chk_unread.text = "允许快进未读文本（调试/快速推进推荐）"
-	_chk_unread.add_theme_font_size_override("font_size", 22)
-	cf_box.add_child(_chk_unread)
-
-	var btn_save_cfg := _make_menu_btn("保存并应用设置", func():
-		if _cfg != null:
-			_cfg.bgm_volume = _slider_bgm.value
-			_cfg.se_volume = _slider_se.value
-			_cfg.voice_volume = _slider_voice.value
-			_cfg.text_speed = _slider_speed.value
-			_cfg.skip_unread = _chk_unread.button_pressed
-			_cfg.save_config()
-			config_applied.emit()
-		_config_view.visible = false
-	)
-	cf_box.add_child(btn_save_cfg)
 
 
 func _build_byoa_view() -> void:
 	_byoa_view = Control.new()
-	_byoa_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_byoa_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_byoa_view.visible = false
 	add_child(_byoa_view)
 
@@ -409,49 +312,6 @@ func _build_byoa_view() -> void:
 	box.add_child(btn_retry)
 
 
-func _make_modal_header(title_txt: String, on_close: Callable) -> HBoxContainer:
-	var hb := HBoxContainer.new()
-	hb.position = Vector2(80, 34)
-	hb.size = Vector2(1760, 56)
-	var lbl := Label.new()
-	lbl.text = title_txt
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.add_theme_font_size_override("font_size", 32)
-	lbl.modulate = Color(1.0, 0.65, 0.25)
-	hb.add_child(lbl)
-	hb.add_child(_make_small_btn("返回", on_close))
-	return hb
-
-
-func _make_small_btn(txt: String, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = txt
-	b.custom_minimum_size = Vector2(120, 46)
-	b.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(true))
-	b.add_theme_stylebox_override("hover", UiThemeLoader.make_button_style(false))
-	b.pressed.connect(cb)
-	return b
-
-
-func _add_slider_row(parent: VBoxContainer, label_txt: String, min_v: float, max_v: float, step_v: float) -> HSlider:
-	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", 20)
-	var lbl := Label.new()
-	lbl.text = label_txt
-	lbl.custom_minimum_size = Vector2(360, 42)
-	lbl.add_theme_font_size_override("font_size", 22)
-	var sl := HSlider.new()
-	sl.min_value = min_v
-	sl.max_value = max_v
-	sl.step = step_v
-	sl.custom_minimum_size = Vector2(560, 42)
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hb.add_child(lbl)
-	hb.add_child(sl)
-	parent.add_child(hb)
-	return sl
-
-
 func _bind_textures_and_renderers() -> void:
 	if _vfs != null:
 		_name_renderer.bind_vfs(_vfs)
@@ -465,17 +325,14 @@ func _bind_textures_and_renderers() -> void:
 			_meswin_plate.texture = m_assets["box"] as Texture2D
 		if m_assets.get("accent", null) != null:
 			_meswin_accent.texture = m_assets["accent"] as Texture2D
-		var p_bgs := _theme_loader.get_panel_backdrops()
-		if p_bgs.get("backlog", null) != null:
-			_backlog_bg.texture = p_bgs["backlog"] as Texture2D
-		if p_bgs.get("savemenu", null) != null:
-			_saveload_bg.texture = p_bgs["savemenu"] as Texture2D
-		if p_bgs.get("config", null) != null:
-			_config_bg.texture = p_bgs["config"] as Texture2D
 
 
 func _process(delta: float) -> void:
 	_blink_t += delta
+	if _tips_toast != null and _tips_toast.visible:
+		_tips_toast_timer -= delta
+		if _tips_toast_timer <= 0.0:
+			_tips_toast.visible = false
 	if _dialogue_view != null and _dialogue_view.visible:
 		var completed := _body_renderer.is_fully_revealed()
 		if not completed:
@@ -483,6 +340,27 @@ func _process(delta: float) -> void:
 		_wait_cursor.visible = completed and not _choices_panel.visible
 		if _wait_cursor.visible:
 			_wait_cursor.modulate.a = 0.55 + 0.45 * sin(_blink_t * 6.0)
+
+
+func show_tips_toast(tip_id: int) -> void:
+	if _cfg != null and not _cfg.show_tips_popup:
+		return
+	_ensure_ui()
+	if _tips_toast == null:
+		_tips_toast = PanelContainer.new()
+		_tips_toast.position = Vector2(28, 74)
+		_tips_toast.size = Vector2(360, 50)
+		_tips_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_tips_toast.add_theme_stylebox_override("panel", UiThemeLoader.make_dark_panel_style(Color(0.06, 0.09, 0.14, 0.92), Color(0.95, 0.58, 0.16, 0.95)))
+		add_child(_tips_toast)
+		_tips_toast_label = Label.new()
+		_tips_toast_label.add_theme_font_size_override("font_size", 18)
+		_tips_toast_label.modulate = Color(1.0, 0.84, 0.42)
+		_tips_toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_tips_toast.add_child(_tips_toast_label)
+	_tips_toast_label.text = "TIPS 已登录: No.%03d" % (tip_id + 1)
+	_tips_toast.visible = true
+	_tips_toast_timer = 3.2
 
 
 func show_byoa_wizard(missing_paths: PackedStringArray) -> void:
@@ -546,9 +424,9 @@ func show_dialogue_line(buf: PackedByteArray, str_offset: int, instant: bool = f
 	var cps := _cfg.text_speed if _cfg != null else 60.0
 	_body_renderer.set_text_speed(cps)
 	_body_renderer.set_sc3_string(buf, str_offset, _vm, null, instant)
-	var name_Arr := _body_renderer.get_name_glyphs()
+	var name_arr := _body_renderer.get_name_glyphs()
 	var gids := PackedInt32Array()
-	for ng in name_Arr:
+	for ng in name_arr:
 		gids.append(int(ng["gid"]))
 	_name_renderer.set_glyph_list(gids, 0.76, Color(1.0, 0.78, 0.35))
 
@@ -571,6 +449,7 @@ func reveal_dialogue_instant() -> void:
 
 func show_choices(choices: Array) -> void:
 	for c in _choices_box.get_children():
+		_choices_box.remove_child(c)
 		c.queue_free()
 	if choices.is_empty():
 		_choices_panel.visible = false
@@ -608,94 +487,64 @@ func show_choices(choices: Array) -> void:
 	_choices_panel.visible = true
 
 
+func has_modal_open() -> bool:
+	return (
+		(_backlog_view != null and _backlog_view.visible)
+		or (_saveload_view != null and _saveload_view.visible)
+		or (_config_view != null and _config_view.visible)
+	)
+
+
+func close_all_modals() -> void:
+	if _backlog_view != null:
+		_backlog_view.visible = false
+	if _saveload_view != null:
+		_saveload_view.visible = false
+	if _config_view != null:
+		_config_view.visible = false
+	_notify_modal_state()
+
+
+func _notify_modal_state() -> void:
+	modal_visibility_changed.emit(has_modal_open())
+
+
 func open_backlog() -> void:
-	for c in _backlog_list.get_children():
-		c.queue_free()
-	if _vm != null:
-		var entries := _vm.backlog
-		var start := maxi(0, entries.size() - 60)
-		for i in range(start, entries.size()):
-			var item: Dictionary = entries[i]
-			var card := PanelContainer.new()
-			card.custom_minimum_size = Vector2(1540, 84)
-			card.add_theme_stylebox_override("panel", UiThemeLoader.make_dark_panel_style(Color(0.08, 0.09, 0.12, 0.88), Color(0.45, 0.32, 0.18, 0.7)))
-			var hbox := HBoxContainer.new()
-			hbox.add_theme_constant_override("separation", 12)
-			card.add_child(hbox)
-
-			var holder := Control.new()
-			holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			holder.custom_minimum_size = Vector2(1340, 68)
-			hbox.add_child(holder)
-
-			var sname := str(item.get("script", ""))
-			var off := int(item.get("str_offset", -1))
-			if _vfs != null and _vfs.is_mounted and sname != "" and off >= 0:
-				var sdata := _vfs.read_entry("script.mpk", sname)
-				if not sdata.is_empty():
-					var fr := MgsFontRenderer.new()
-					fr.bind_vfs(_vfs)
-					fr.base_scale = 0.56
-					fr.line_height = 34.0
-					fr.max_line_width = 1320.0
-					holder.add_child(fr)
-					fr.set_sc3_string(sdata, off, _vm, null, true)
-
-			var vid := int(item.get("voice_id", -1))
-			if vid > 0:
-				var vbtn := _make_small_btn("▶ 语音", func(): voice_replay_requested.emit(vid))
-				hbox.add_child(vbtn)
-
-			_backlog_list.add_child(card)
-	_backlog_view.visible = true
+	if _backlog_view == null:
+		return
+	if _saveload_view != null:
+		_saveload_view.visible = false
+	if _config_view != null:
+		_config_view.visible = false
+	_backlog_view.open_panel()
+	_notify_modal_state()
 
 
 func open_saveload(is_save: bool) -> void:
-	_saveload_is_save = is_save
-	_saveload_title.text = "存档保存 SAVE DATA" if is_save else "读取存档 LOAD DATA"
-	for c in _saveload_grid.get_children():
-		c.queue_free()
-
-	for slot_id in range(NUM_SAVE_SLOTS):
-		var meta := read_slot_meta(slot_id)
-		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(560, 190)
-		btn.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(true))
-		btn.add_theme_stylebox_override("hover", UiThemeLoader.make_button_style(false))
-		if meta.is_empty():
-			btn.text = "SLOT %02d\n\n— NO DATA —" % (slot_id + 1)
-			if not is_save:
-				btn.disabled = true
-		else:
-			btn.text = "SLOT %02d  [%s]\n%s\n%s" % [
-				slot_id + 1,
-				str(meta.get("script_name", "")),
-				str(meta.get("timestamp", "")),
-				str(meta.get("summary", "点击操作")),
-			]
-		btn.add_theme_font_size_override("font_size", 20)
-		btn.pressed.connect(func():
-			_saveload_view.visible = false
-			if is_save:
-				save_slot_requested.emit(slot_id)
-			else:
-				load_slot_requested.emit(slot_id)
-		)
-		_saveload_grid.add_child(btn)
-	_saveload_view.visible = true
+	if _saveload_view == null:
+		return
+	if _backlog_view != null:
+		_backlog_view.visible = false
+	if _config_view != null:
+		_config_view.visible = false
+	_saveload_view.open_panel(is_save)
+	_notify_modal_state()
 
 
-func open_config() -> void:
-	if _cfg != null:
-		_slider_bgm.value = _cfg.bgm_volume
-		_slider_se.value = _cfg.se_volume
-		_slider_voice.value = _cfg.voice_volume
-		_slider_speed.value = _cfg.text_speed
-		_chk_unread.button_pressed = _cfg.skip_unread
-	_config_view.visible = true
+func open_config(initial_tab: int = 0) -> void:
+	if _config_view == null:
+		return
+	if _backlog_view != null:
+		_backlog_view.visible = false
+	if _saveload_view != null:
+		_saveload_view.visible = false
+	_config_view.open_panel(initial_tab)
+	_notify_modal_state()
 
 
 func _on_dialogue_tap(event: InputEvent) -> void:
+	if has_modal_open():
+		return
 	if _ui_hidden:
 		if (event is InputEventMouseButton and event.pressed) or (event is InputEventScreenTouch and event.pressed):
 			toggle_hide_ui()
@@ -716,6 +565,10 @@ static func get_slot_path(slot_id: int) -> String:
 	return "%s/slot_%02d.json" % [SAVE_DIR, slot_id]
 
 
+static func get_slot_thumb_path(slot_id: int) -> String:
+	return "%s/slot_%02d.png" % [SAVE_DIR, slot_id]
+
+
 func _has_any_save() -> bool:
 	for s in range(NUM_SAVE_SLOTS):
 		if FileAccess.file_exists(get_slot_path(s)):
@@ -723,8 +576,16 @@ func _has_any_save() -> bool:
 	return FileAccess.file_exists(get_slot_path(99))
 
 
-static func write_slot_data(slot_id: int, state: Dictionary, summary_text: String = "") -> bool:
+static func write_slot_data(
+	slot_id: int,
+	state: Dictionary,
+	summary_text: String = "",
+	play_time_sec: int = 0,
+	thumb_img: Image = null
+) -> bool:
 	DirAccess.make_dir_recursive_absolute(SAVE_DIR)
+	var existing := read_slot_meta(slot_id)
+	var keep_locked := bool(existing.get("locked", false))
 	var dt := Time.get_datetime_dict_from_system()
 	var ts := "%04d/%02d/%02d %02d:%02d:%02d" % [
 		int(dt["year"]), int(dt["month"]), int(dt["day"]),
@@ -733,6 +594,8 @@ static func write_slot_data(slot_id: int, state: Dictionary, summary_text: Strin
 	var payload := {
 		"slot_id": slot_id,
 		"timestamp": ts,
+		"play_time_sec": maxi(0, play_time_sec),
+		"locked": keep_locked,
 		"script_name": str(state.get("script_name", "")),
 		"summary": summary_text,
 		"vm_state": state,
@@ -741,6 +604,24 @@ static func write_slot_data(slot_id: int, state: Dictionary, summary_text: Strin
 	if f == null:
 		return false
 	f.store_string(JSON.stringify(payload))
+	f.close()
+
+	if thumb_img != null and not thumb_img.is_empty():
+		var scaled := thumb_img.duplicate() as Image
+		scaled.resize(320, 180, Image.INTERPOLATE_BILINEAR)
+		scaled.save_png(get_slot_thumb_path(slot_id))
+	return true
+
+
+static func set_slot_locked(slot_id: int, locked: bool) -> bool:
+	var meta := read_slot_meta(slot_id)
+	if meta.is_empty():
+		return false
+	meta["locked"] = locked
+	var f := FileAccess.open(get_slot_path(slot_id), FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string(JSON.stringify(meta))
 	f.close()
 	return true
 

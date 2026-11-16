@@ -76,12 +76,153 @@ func get_meswin_assets() -> Dictionary:
 func get_panel_backdrops() -> Dictionary:
 	return {
 		"savemenu": get_region("SAVEMENU.DDS", Rect2i(5, 0, 1664, 1009)),
-		"savemenu_nodata": get_region("SAVEMENU.DDS", Rect2i(1686, 40, 290, 170)),
+		"savemenu_nodata": get_region("SAVEMENU.DDS", Rect2i(1686, 84, 288, 162)),
 		"config": get_region("CONFIG.DDS", Rect2i(0, 0, 1920, 1080)),
-		"backlog": get_region("BACKLOG.DDS", Rect2i(150, 0, 1640, 1080)),
+		"backlog": get_region("BACKLOG.DDS", Rect2i(160, 0, 1665, 1080)),
 		"tips": get_region("SYSM_TIPS.DDS", Rect2i(0, 0, 1920, 1080)),
 		"phone_frame": get_region("PHONE.DDS", Rect2i(0, 0, 620, 1080)),
 		"amadeus_logo": get_region("PHONE.DDS", Rect2i(940, 760, 400, 240)),
+	}
+
+
+## 获取 PC 1:1 CONFIG 系统设置界面全套原版切片
+func get_config_assets() -> Dictionary:
+	var voice_slots: Array[Texture2D] = []
+	for r in range(4):
+		for c in range(4):
+			voice_slots.append(get_region("CONFIG.DDS", Rect2i(1 + c * 624, 2173 + r * 78, 620, 76)))
+
+	return {
+		"bg": get_region("CONFIG.DDS", Rect2i(0, 0, 1920, 1080)),
+		"tabs_active": [
+			get_region("CONFIG.DDS", Rect2i(1936, 17, 472, 146)),
+			get_region("CONFIG.DDS", Rect2i(1936, 197, 472, 146)),
+			get_region("CONFIG.DDS", Rect2i(1936, 377, 472, 145)),
+			get_region("CONFIG.DDS", Rect2i(2427, 377, 472, 145)),
+		],
+		"headers": [
+			get_region("CONFIG.DDS", Rect2i(1936, 728, 308, 88)),
+			get_region("CONFIG.DDS", Rect2i(1939, 816, 305, 88)),
+			get_region("CONFIG.DDS", Rect2i(1934, 904, 310, 88)),
+			get_region("CONFIG.DDS", Rect2i(1932, 992, 620, 88)),
+		],
+		"row_highlight": get_region("CONFIG.DDS", Rect2i(2439, 8, 501, 33)),
+		"slider_frame": get_region("CONFIG.DDS", Rect2i(2433, 63, 532, 50)),
+		"slider_fill": get_region("CONFIG.DDS", Rect2i(2436, 132, 474, 42)),
+		"select_oval_red": get_region("CONFIG.DDS", Rect2i(2430, 198, 152, 92)),
+		"select_oval_white": get_region("CONFIG.DDS", Rect2i(2580, 199, 152, 92)),
+		"voice_off_bar": get_region("CONFIG.DDS", Rect2i(2436, 312, 474, 42)),
+		"voice_up_arrow": get_region("CONFIG.DDS", Rect2i(2920, 40, 107, 50)),
+		"voice_down_arrow": get_region("CONFIG.DDS", Rect2i(2931, 90, 100, 45)),
+		"voice_highlight": get_region("CONFIG.DDS", Rect2i(2523, 2195, 546, 219)),
+		"voice_slots": voice_slots,
+		"ring_config": get_region("SYSM_TIPS.DDS", Rect2i(610, 1080, 640, 573)),
+		"icon_tools": get_region("SYSM_TIPS.DDS", Rect2i(2135, 412, 199, 179)),
+		"footer_config": get_region("SYSM_TIPS.DDS", Rect2i(929, 1778, 959, 60)),
+		"footer_voice": get_region("SYSM_TIPS.DDS", Rect2i(596, 1856, 1292, 60)),
+		# BASIC 行标签与选项
+		"lbl_trigger_skip": get_region("CONFIG.DDS", Rect2i(1940, 1097, 815, 50)),
+		"opt_trigger_yes": get_region("CONFIG.DDS", Rect2i(2778, 1097, 52, 50)),
+		"opt_trigger_no": get_region("CONFIG.DDS", Rect2i(2925, 1097, 46, 50)),
+		"lbl_tips_popup": get_region("CONFIG.DDS", Rect2i(1940, 1167, 815, 48)),
+		"opt_tips_yes": get_region("CONFIG.DDS", Rect2i(2778, 1167, 52, 48)),
+		"opt_tips_no": get_region("CONFIG.DDS", Rect2i(2925, 1167, 46, 48)),
+		"lbl_auto_qsave": get_region("CONFIG.DDS", Rect2i(1950, 1240, 468, 50)),
+		"opt_qsave_scene": get_region("CONFIG.DDS", Rect2i(2432, 1240, 96, 50)),
+		"opt_qsave_trig": get_region("CONFIG.DDS", Rect2i(2598, 1240, 146, 50)),
+		"opt_qsave_both": get_region("CONFIG.DDS", Rect2i(2788, 1240, 100, 50)),
+		"opt_qsave_none": get_region("CONFIG.DDS", Rect2i(2934, 1240, 98, 50)),
+		"lbl_fullscreen": get_region("CONFIG.DDS", Rect2i(1950, 552, 570, 46)),
+		"opt_full_on": get_region("CONFIG.DDS", Rect2i(2528, 552, 94, 46)),
+		"opt_full_off": get_region("CONFIG.DDS", Rect2i(2864, 552, 92, 46)),
+		"lbl_resolution": get_region("CONFIG.DDS", Rect2i(1942, 622, 535, 50)),
+		"opt_res_0": get_region("CONFIG.DDS", Rect2i(2482, 622, 178, 50)),
+		"opt_res_1": get_region("CONFIG.DDS", Rect2i(2664, 622, 191, 50)),
+		"opt_res_2": get_region("CONFIG.DDS", Rect2i(2862, 622, 191, 50)),
+		# TEXT 行标签与选项
+		"lbl_msg_speed": get_region("CONFIG.DDS", Rect2i(1942, 1457, 610, 44)),
+		"lbl_auto_wait": get_region("CONFIG.DDS", Rect2i(1952, 1531, 600, 46)),
+		"lbl_skip_mode": get_region("CONFIG.DDS", Rect2i(1940, 1600, 735, 50)),
+		"opt_skip_read": get_region("CONFIG.DDS", Rect2i(2704, 1600, 146, 50)),
+		"opt_skip_all": get_region("CONFIG.DDS", Rect2i(2948, 1600, 92, 50)),
+		# SOUND 行标签与选项
+		"lbl_vol_voice": get_region("CONFIG.DDS", Rect2i(1940, 1750, 610, 45)),
+		"lbl_vol_bgm": get_region("CONFIG.DDS", Rect2i(1940, 1823, 610, 41)),
+		"lbl_vol_se": get_region("CONFIG.DDS", Rect2i(1940, 1895, 610, 41)),
+		"lbl_vol_movie": get_region("CONFIG.DDS", Rect2i(1939, 1967, 610, 41)),
+		"lbl_audio_sync": get_region("CONFIG.DDS", Rect2i(1940, 2033, 815, 49)),
+		"opt_sync_yes": get_region("CONFIG.DDS", Rect2i(2775, 2033, 52, 49)),
+		"opt_sync_no": get_region("CONFIG.DDS", Rect2i(2922, 2033, 46, 49)),
+		"lbl_skip_voice": get_region("CONFIG.DDS", Rect2i(1940, 2105, 815, 51)),
+		"opt_svoice_yes": get_region("CONFIG.DDS", Rect2i(2775, 2105, 52, 51)),
+		"opt_svoice_no": get_region("CONFIG.DDS", Rect2i(2922, 2105, 46, 51)),
+	}
+
+
+## 获取 PC 1:1 SAVE/LOAD 界面全套原版切片
+func get_saveload_assets() -> Dictionary:
+	var page_digits: Array[Texture2D] = [
+		get_region("SAVEMENU.DDS", Rect2i(2338, 87, 13, 31)),
+		get_region("SAVEMENU.DDS", Rect2i(2371, 87, 20, 31)),
+		get_region("SAVEMENU.DDS", Rect2i(2407, 87, 19, 31)),
+		get_region("SAVEMENU.DDS", Rect2i(2442, 87, 22, 31)),
+		get_region("SAVEMENU.DDS", Rect2i(2479, 87, 20, 31)),
+		get_region("SAVEMENU.DDS", Rect2i(2515, 87, 21, 31)),
+	]
+	return {
+		"bg": get_region("SYSM_SAVEMENU.DDS", Rect2i(0, 0, 1920, 1080)),
+		"frame": get_region("SAVEMENU.DDS", Rect2i(0, 0, 1670, 1015)),
+		"nodata": get_region("SAVEMENU.DDS", Rect2i(1686, 84, 288, 162)),
+		"slot_highlight": get_region("SAVEMENU.DDS", Rect2i(1692, 336, 780, 174)),
+		"pill_active": get_region("SAVEMENU.DDS", Rect2i(2135, 138, 76, 18)),
+		"pill_glow": get_region("SAVEMENU.DDS", Rect2i(2236, 141, 90, 36)),
+		"slash_6": get_region("SAVEMENU.DDS", Rect2i(2281, 87, 37, 31)),
+		"page_digits": page_digits,
+		"unlocked_badge": get_region("SAVEMENU.DDS", Rect2i(2198, 201, 188, 41)),
+		"locked_badge": get_region("SAVEMENU.DDS", Rect2i(2234, 267, 139, 41)),
+		"ring_save": get_region("SYSM_SAVEMENU.DDS", Rect2i(0, 1080, 610, 573)),
+		"ring_load": get_region("SYSM_SAVEMENU.DDS", Rect2i(600, 1080, 610, 573)),
+		"icon_clock_round": get_region("SYSM_SAVEMENU.DDS", Rect2i(1932, 6, 179, 184)),
+		"icon_clock_square": get_region("SYSM_SAVEMENU.DDS", Rect2i(1936, 217, 173, 174)),
+		"footer": get_region("SYSM_SAVEMENU.DDS", Rect2i(1178, 1700, 709, 60)),
+	}
+
+
+## 获取 PC 1:1 BACKLOG 界面全套原版切片
+func get_backlog_assets() -> Dictionary:
+	return {
+		"panel": get_region("BACKLOG.DDS", Rect2i(160, 0, 1665, 1080)),
+		"scroll_thumb": get_region("BACKLOG.DDS", Rect2i(1932, 8, 28, 91)),
+		"speaker_icon": get_region("BACKLOG.DDS", Rect2i(1929, 117, 58, 44)),
+		"ring_backlog": get_region("SYSM_SAVEMENU.DDS", Rect2i(1800, 1080, 591, 573)),
+		"icon_book": get_region("SYSM_SAVEMENU.DDS", Rect2i(2132, 5, 214, 171)),
+		"footer": get_region("SYSM_SAVEMENU.DDS", Rect2i(1331, 1778, 555, 60)),
+	}
+
+
+## 获取 PC 1:1 TIPS 界面全套原版切片
+func get_tips_assets() -> Dictionary:
+	return {
+		"bg": get_region("SYSM_TIPS.DDS", Rect2i(0, 0, 1920, 1080)),
+		"grid_frame": get_region("TIPSCHIPS.DDS", Rect2i(0, 0, 1920, 1080)),
+		"ring_tips": get_region("SYSM_TIPS.DDS", Rect2i(0, 1080, 620, 573)),
+		"icon_globe": get_region("SYSM_TIPS.DDS", Rect2i(2130, 201, 180, 174)),
+		"footer": get_region("SYSM_TIPS.DDS", Rect2i(857, 1700, 1030, 60)),
+		"tabs_active": [
+			get_region("TIPSCHIPS.DDS", Rect2i(1926, 96, 150, 42)),
+			get_region("TIPSCHIPS.DDS", Rect2i(2081, 96, 150, 42)),
+			get_region("TIPSCHIPS.DDS", Rect2i(2236, 96, 150, 42)),
+			get_region("TIPSCHIPS.DDS", Rect2i(2391, 96, 150, 42)),
+		],
+		"tabs_inactive": [
+			get_region("TIPSCHIPS.DDS", Rect2i(1926, 48, 150, 42)),
+			get_region("TIPSCHIPS.DDS", Rect2i(2081, 48, 150, 42)),
+			get_region("TIPSCHIPS.DDS", Rect2i(2236, 48, 150, 42)),
+			get_region("TIPSCHIPS.DDS", Rect2i(2391, 48, 150, 42)),
+		],
+		"row_highlight": get_region("TIPSCHIPS.DDS", Rect2i(1926, 144, 618, 46)),
+		"new_badge": get_region("TIPSCHIPS.DDS", Rect2i(2540, 81, 72, 44)),
+		"scroll_thumb": get_region("TIPSCHIPS.DDS", Rect2i(2846, 11, 26, 71)),
 	}
 
 
