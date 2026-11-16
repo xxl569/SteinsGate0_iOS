@@ -1,9 +1,10 @@
 class_name UiPhoneRine
 extends Control
-## PC 1:1 复刻智能手机终端（桌面 / 電話通讯录 / RINE 聊天与18枚贴纸 / 设置 / 12张壁纸设置 / 7首来电铃声试听）
+## PC 1:1 复刻智能手机终端（桌面 / 電話通讯录 / RINE 聊天与21枚贴纸 / 设置 / 12张壁纸设置 / 7首来电铃声试听）
 
 signal panel_toggled(opened: bool)
 signal amadeus_action(accepted: bool)
+signal rine_reply_selected(str_id: int)
 
 enum PhoneScreen {
 	HOME = 0,
@@ -24,19 +25,21 @@ const RINGTONE_NAMES: Array[String] = [
 	"GATE OF STEINER",
 ]
 
+# 头像索引严格对应 PHONE_RINE.DDS 左侧 12 行 (0..11)：
+# 0=冈部 1=真由理 2=桶子 3=红莉栖 4=萌郁 5=琉华 6=菲莉丝 7=铃羽 8=真帆 9=由季 10=篝 11=默认剪影
 const CONTACT_DEFS: Array[Dictionary] = [
-	{"id": 0, "name": "冈部 伦太郎", "status": "鳳凰院凶真 / LabMem001", "avatar": 0},
-	{"id": 1, "name": "椎名 真由理", "status": "嘟嘟噜♪ LabMem002", "avatar": 1},
-	{"id": 2, "name": "桥田 至 (桶子)", "status": "超级黑客 LabMem003", "avatar": 2},
-	{"id": 3, "name": "牧濑 红莉栖 (Amadeus)", "status": "维克多·孔多利亚大学 AI", "avatar": 3},
-	{"id": 4, "name": "桐生 萌郁", "status": "闪光的指压师", "avatar": 4},
-	{"id": 5, "name": "漆原 琉华", "status": "柳林神社", "avatar": 5},
-	{"id": 6, "name": "菲利斯·喵喵", "status": "MayQueen+Nyan2", "avatar": 6},
-	{"id": 7, "name": "阿万音 铃羽", "status": "打工战士 LabMem008", "avatar": 7},
-	{"id": 8, "name": "比屋定 真帆", "status": "维克多·孔多利亚研究员", "avatar": 8},
-	{"id": 9, "name": "椎名 篝", "status": "未来之子", "avatar": 9},
-	{"id": 10, "name": "阿万音 由季", "status": "Coser / 铃羽之母", "avatar": 10},
-	{"id": 11, "name": "亚历克西斯·莱斯基宁", "status": "教授 / Shaman Girls", "avatar": 11},
+	{"id": 0, "name": "冈部 伦太郎", "short": "伦太郎", "status": "鳳凰院凶真 / LabMem001", "avatar": 0, "in_phonebook": false, "default_unlocked": true},
+	{"id": 1, "name": "真由理", "short": "真由理", "status": "嘟嘟噜♪ LabMem002", "avatar": 1, "in_phonebook": true, "default_unlocked": true},
+	{"id": 2, "name": "桶子", "short": "桶子", "status": "超级黑客 LabMem003", "avatar": 2, "in_phonebook": true, "default_unlocked": true},
+	{"id": 5, "name": "琉华子", "short": "琉华子", "status": "柳林神社", "avatar": 5, "in_phonebook": true, "default_unlocked": true},
+	{"id": 7, "name": "铃羽", "short": "铃羽", "status": "打工战士 LabMem008", "avatar": 7, "in_phonebook": true, "default_unlocked": true},
+	{"id": 6, "name": "菲莉丝", "short": "菲莉丝", "status": "MayQueen+Nyan2", "avatar": 6, "in_phonebook": true, "default_unlocked": true},
+	{"id": 10, "name": "阿万音由季", "short": "阿万音由季", "status": "Coser / 铃羽之母", "avatar": 9, "in_phonebook": true, "default_unlocked": true},
+	{"id": 3, "name": "牧濑 红莉栖 (Amadeus)", "short": "红莉栖 (Amadeus)", "status": "维克多·孔多利亚大学 AI", "avatar": 3, "in_phonebook": true, "default_unlocked": false},
+	{"id": 8, "name": "比屋定 真帆", "short": "比屋定真帆", "status": "维克多·孔多利亚研究员", "avatar": 8, "in_phonebook": true, "default_unlocked": false},
+	{"id": 4, "name": "桐生 萌郁", "short": "桐生萌郁", "status": "闪光的指压师", "avatar": 4, "in_phonebook": true, "default_unlocked": false},
+	{"id": 9, "name": "椎名 篝", "short": "椎名篝", "status": "未来之子", "avatar": 10, "in_phonebook": true, "default_unlocked": false},
+	{"id": 11, "name": "亚历克西斯·莱斯基宁", "short": "莱斯基宁", "status": "教授 / Shaman Girls", "avatar": 11, "in_phonebook": true, "default_unlocked": false},
 ]
 
 # PHONE.DDS 内屏幕开孔区域 (x:118..572, y:124..918 -> 454x794)
@@ -65,6 +68,12 @@ var _msg_list: VBoxContainer = null
 var _msg_scroll: ScrollContainer = null
 var _sticker_panel: PanelContainer = null
 var _sticker_grid: GridContainer = null
+var _reply_panel: PanelContainer = null
+var _reply_list: VBoxContainer = null
+var _quick_reply_btn: Button = null
+var _contact_toast_lbl: Label = null
+var _amadeus_btn: TextureButton = null
+var _contact_btns: Dictionary = {} # cid -> Button
 var _status_label: Label = null
 var _top_status_date: Label = null
 var _chat_title_label: Label = null
@@ -102,7 +111,11 @@ var _phone_assets: Dictionary = {}
 var _phone_bytes: PackedByteArray = PackedByteArray()
 var _phone_offsets: PackedInt32Array = PackedInt32Array()
 var _messages: Array[Dictionary] = []
+var _messages_by_contact: Dictionary = {} # cid -> Array[Dictionary]
+var _unlocked_contacts: Dictionary = {0: true, 1: true, 2: true, 5: true, 6: true, 7: true, 10: true}
+var _amadeus_unlocked: bool = false
 var _reply_options: Array[int] = []
+var _reply_tray_visible: bool = false
 
 
 func _ready() -> void:
@@ -227,6 +240,7 @@ func _ensure_ui() -> void:
 	btn_conn.pressed.connect(func():
 		_connect_bar.visible = false
 		_amadeus_logo.visible = false
+		_stop_ringtone()
 		amadeus_action.emit(true)
 	)
 	var btn_cancel := Button.new()
@@ -235,6 +249,7 @@ func _ensure_ui() -> void:
 	btn_cancel.pressed.connect(func():
 		_connect_bar.visible = false
 		_amadeus_logo.visible = false
+		_stop_ringtone()
 		amadeus_action.emit(false)
 	)
 	_connect_bar.add_child(btn_conn)
@@ -272,7 +287,6 @@ func _build_home_screen() -> void:
 		{"idx": 3, "title": "設定", "cb": Callable(self, "_open_settings_app")},
 	]
 	for item in apps:
-		var idx: int = int(item["idx"])
 		var btn := TextureButton.new()
 		btn.name = "AppBtn_%s" % item["title"]
 		btn.custom_minimum_size = Vector2(92, 114)
@@ -280,6 +294,9 @@ func _build_home_screen() -> void:
 		btn.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(item["cb"])
+		if str(item["title"]) == "Amadeus":
+			_amadeus_btn = btn
+			btn.visible = _amadeus_unlocked
 		col.add_child(btn)
 
 
@@ -308,55 +325,55 @@ func _build_contacts_screen() -> void:
 	list.add_theme_constant_override("separation", 2)
 	scroll.add_child(list)
 
+	_contact_btns.clear()
 	for c in CONTACT_DEFS:
+		if not bool(c.get("in_phonebook", true)):
+			continue
 		var cid: int = int(c["id"])
 		var btn := Button.new()
 		btn.custom_minimum_size = Vector2(SCREEN_W - 8, 66)
 		btn.focus_mode = Control.FOCUS_NONE
+		btn.visible = bool(_unlocked_contacts.get(cid, bool(c.get("default_unlocked", false))))
 		btn.add_theme_stylebox_override("normal", _make_flat_box(Color(0.11, 0.13, 0.18, 0.95), Color(0.24, 0.30, 0.40, 0.5), 0))
 		btn.add_theme_stylebox_override("hover", _make_flat_box(Color(0.16, 0.56, 0.92, 0.95), Color(0.35, 0.78, 1.0, 1.0), 0))
-		btn.pressed.connect(func():
-			_active_contact_idx = cid
-			_refresh_chat_header()
-			_append_text_msg(cid, "已切换至与 %s 的通讯频道。" % c["name"], false)
-			switch_screen(PhoneScreen.CHAT)
-		)
+		btn.pressed.connect(func(): _on_contact_pressed(cid, str(c.get("short", c["name"]))))
 
 		var row := HBoxContainer.new()
 		row.set_anchors_preset(Control.PRESET_FULL_RECT)
-		row.add_theme_constant_override("separation", 12)
+		row.add_theme_constant_override("separation", 14)
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		btn.add_child(row)
 
 		var av := TextureRect.new()
 		av.name = "ContactAvatar_%d" % cid
-		av.custom_minimum_size = Vector2(54, 58)
+		av.custom_minimum_size = Vector2(54, 54)
 		av.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		av.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		av.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(av)
 
-		var info := VBoxContainer.new()
-		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		info.alignment = BoxContainer.ALIGNMENT_CENTER
-		info.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(info)
-
 		var name_lbl := Label.new()
-		name_lbl.text = str(c["name"])
-		name_lbl.add_theme_font_size_override("font_size", 20)
+		name_lbl.text = str(c.get("short", c["name"]))
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		name_lbl.add_theme_font_size_override("font_size", 22)
 		name_lbl.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0, 1.0))
 		name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		info.add_child(name_lbl)
-
-		var sub_lbl := Label.new()
-		sub_lbl.text = str(c["status"])
-		sub_lbl.add_theme_font_size_override("font_size", 13)
-		sub_lbl.add_theme_color_override("font_color", Color(0.72, 0.80, 0.90, 1.0))
-		sub_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		info.add_child(sub_lbl)
+		row.add_child(name_lbl)
 
 		list.add_child(btn)
+		_contact_btns[cid] = btn
+
+	_contact_toast_lbl = Label.new()
+	_contact_toast_lbl.position = Vector2(20, BODY_H - 52)
+	_contact_toast_lbl.size = Vector2(SCREEN_W - 40, 36)
+	_contact_toast_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_contact_toast_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_contact_toast_lbl.visible = false
+	_contact_toast_lbl.add_theme_font_size_override("font_size", 16)
+	_contact_toast_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.65, 1.0))
+	_contact_toast_lbl.add_theme_stylebox_override("normal", _make_flat_box(Color(0.05, 0.08, 0.14, 0.92), Color(0.45, 0.65, 0.90, 0.8), 6))
+	_screen_contacts.add_child(_contact_toast_lbl)
 
 
 func _build_chat_screen() -> void:
@@ -439,28 +456,26 @@ func _build_chat_screen() -> void:
 	btn_toggle_st.focus_mode = Control.FOCUS_NONE
 	btn_toggle_st.pressed.connect(func():
 		_sticker_tray_visible = not _sticker_tray_visible
+		if _sticker_tray_visible:
+			_reply_tray_visible = false
+			if _reply_panel != null:
+				_reply_panel.visible = false
 		_sticker_panel.visible = _sticker_tray_visible
 		_msg_scroll.size.y = (BODY_H - 302.0) if _sticker_tray_visible else (BODY_H - 122.0)
 	)
 	input_bar.add_child(btn_toggle_st)
 
-	var btn_quick := Button.new()
-	btn_quick.text = "点击选择回复..."
-	btn_quick.position = Vector2(66, 14)
-	btn_quick.size = Vector2(320, 40)
-	btn_quick.flat = true
-	btn_quick.focus_mode = Control.FOCUS_NONE
-	btn_quick.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn_quick.add_theme_font_size_override("font_size", 15)
-	btn_quick.add_theme_color_override("font_color", Color(0.45, 0.50, 0.58, 0.92))
-	btn_quick.pressed.connect(func():
-		if not _reply_options.is_empty():
-			var rid := int(_reply_options.pop_front())
-			_append_sc3_msg(0, rid, true)
-		else:
-			_append_text_msg(0, "了解，我现在就去确认。", true)
-	)
-	input_bar.add_child(btn_quick)
+	_quick_reply_btn = Button.new()
+	_quick_reply_btn.text = "暂无可回复消息"
+	_quick_reply_btn.position = Vector2(66, 14)
+	_quick_reply_btn.size = Vector2(320, 40)
+	_quick_reply_btn.flat = true
+	_quick_reply_btn.focus_mode = Control.FOCUS_NONE
+	_quick_reply_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_quick_reply_btn.add_theme_font_size_override("font_size", 15)
+	_quick_reply_btn.add_theme_color_override("font_color", Color(0.45, 0.50, 0.58, 0.92))
+	_quick_reply_btn.pressed.connect(_toggle_reply_tray)
+	input_bar.add_child(_quick_reply_btn)
 
 	var btn_send := Button.new()
 	btn_send.text = ""
@@ -468,16 +483,10 @@ func _build_chat_screen() -> void:
 	btn_send.size = Vector2(50, 48)
 	btn_send.flat = true
 	btn_send.focus_mode = Control.FOCUS_NONE
-	btn_send.pressed.connect(func():
-		if not _reply_options.is_empty():
-			var rid := int(_reply_options.pop_front())
-			_append_sc3_msg(0, rid, true)
-		else:
-			_append_text_msg(0, "没问题！稍后联络。", true)
-	)
+	btn_send.pressed.connect(_toggle_reply_tray)
 	input_bar.add_child(btn_send)
 
-	# 底部 RINE 表情贴纸栏（18 枚，默认收起、点左下笑脸弹出）
+	# 底部 RINE 表情贴纸栏（21 枚，默认收起、点左下笑脸弹出）
 	_sticker_panel = PanelContainer.new()
 	_sticker_panel.position = Vector2(6, BODY_H - 246)
 	_sticker_panel.size = Vector2(SCREEN_W - 12, 176)
@@ -494,6 +503,23 @@ func _build_chat_screen() -> void:
 	_sticker_grid.add_theme_constant_override("h_separation", 6)
 	_sticker_grid.add_theme_constant_override("v_separation", 6)
 	st_scroll.add_child(_sticker_grid)
+
+	# 底部 RINE 候选回复选择面板（仅当 _reply_options 非空时弹出真实 SC3 回复选项）
+	_reply_panel = PanelContainer.new()
+	_reply_panel.position = Vector2(6, BODY_H - 246)
+	_reply_panel.size = Vector2(SCREEN_W - 12, 176)
+	_reply_panel.visible = false
+	_reply_panel.add_theme_stylebox_override("panel", UiThemeLoader.make_dark_panel_style(Color(0.94, 0.96, 0.99, 0.98), Color(0.25, 0.55, 0.88, 0.9)))
+	_screen_chat.add_child(_reply_panel)
+
+	var rp_scroll := ScrollContainer.new()
+	rp_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_reply_panel.add_child(rp_scroll)
+
+	_reply_list = VBoxContainer.new()
+	_reply_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_reply_list.add_theme_constant_override("separation", 6)
+	rp_scroll.add_child(_reply_list)
 
 
 func _build_settings_screen() -> void:
@@ -871,12 +897,64 @@ func _populate_sticker_tray() -> void:
 		if tex == null:
 			continue
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(76, 76)
+		btn.custom_minimum_size = Vector2(76, 66)
 		btn.icon = tex
 		btn.expand_icon = true
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(func(): _append_sticker_msg(i))
 		_sticker_grid.add_child(btn)
+
+
+func _get_contact_def(cid: int) -> Dictionary:
+	for c in CONTACT_DEFS:
+		if int(c["id"]) == cid:
+			return c
+	return CONTACT_DEFS[1]
+
+
+func _get_contact_avatar_idx(cid: int) -> int:
+	var c := _get_contact_def(cid)
+	return int(c.get("avatar", 11))
+
+
+func _on_contact_pressed(cid: int, short_name: String) -> void:
+	if _contact_toast_lbl == null:
+		return
+	_contact_toast_lbl.text = "%s：当前非通话时段" % short_name
+	_contact_toast_lbl.visible = true
+	var tw := create_tween()
+	tw.tween_interval(1.6)
+	tw.tween_callback(func():
+		if is_instance_valid(_contact_toast_lbl):
+			_contact_toast_lbl.visible = false
+	)
+	# 同步记录目标联系人以便进入 RINE 时可查看对应频道
+	_active_contact_idx = cid
+
+
+func _refresh_contacts_visibility() -> void:
+	for cid in _contact_btns.keys():
+		var btn := _contact_btns[cid] as Button
+		if is_instance_valid(btn):
+			btn.visible = bool(_unlocked_contacts.get(int(cid), false))
+	if _amadeus_btn != null:
+		_amadeus_btn.visible = _amadeus_unlocked
+
+
+func unlock_contact(cid: int) -> void:
+	_unlocked_contacts[cid] = true
+	_refresh_contacts_visibility()
+
+
+func unlock_amadeus() -> void:
+	_amadeus_unlocked = true
+	unlock_contact(3)
+	_refresh_contacts_visibility()
+
+
+func _stop_ringtone() -> void:
+	if _audio != null and _audio.has_method("stop_all_se"):
+		_audio.stop_all_se()
 
 
 func switch_screen(target: int, push_history: bool = true) -> void:
@@ -960,8 +1038,78 @@ func select_ringtone(idx: int, preview_audio: bool = true) -> void:
 func _refresh_chat_header() -> void:
 	if _chat_title_label == null:
 		return
-	var idx := clampi(_active_contact_idx, 0, CONTACT_DEFS.size() - 1)
-	_chat_title_label.text = "RINE · %s" % CONTACT_DEFS[idx]["name"]
+	var c := _get_contact_def(_active_contact_idx)
+	_chat_title_label.text = "RINE · %s" % str(c.get("short", c["name"]))
+	_rebuild_chat_for_active_contact()
+
+
+func _refresh_reply_prompt() -> void:
+	if _quick_reply_btn == null:
+		return
+	if _reply_options.is_empty():
+		_quick_reply_btn.text = "暂无可回复消息"
+		_reply_tray_visible = false
+		if _reply_panel != null:
+			_reply_panel.visible = false
+	else:
+		_quick_reply_btn.text = "点击选择回复 (%d)..." % _reply_options.size()
+
+
+func _toggle_reply_tray() -> void:
+	if _reply_options.is_empty():
+		return
+	_reply_tray_visible = not _reply_tray_visible
+	if _reply_tray_visible:
+		_sticker_tray_visible = false
+		if _sticker_panel != null:
+			_sticker_panel.visible = false
+		_rebuild_reply_list()
+	if _reply_panel != null:
+		_reply_panel.visible = _reply_tray_visible
+	_msg_scroll.size.y = (BODY_H - 302.0) if (_reply_tray_visible or _sticker_tray_visible) else (BODY_H - 122.0)
+
+
+func _rebuild_reply_list() -> void:
+	if _reply_list == null:
+		return
+	for c in _reply_list.get_children():
+		_reply_list.remove_child(c)
+		c.queue_free()
+	for rid in _reply_options:
+		var opt_id := int(rid)
+		if _phone_bytes.is_empty() or opt_id < 0 or opt_id >= _phone_offsets.size():
+			continue
+		var btn := Button.new()
+		btn.custom_minimum_size = Vector2(SCREEN_W - 28, 48)
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.add_theme_stylebox_override("normal", _make_flat_box(Color(0.88, 0.94, 0.99, 1.0), Color(0.32, 0.62, 0.92, 0.9), 6))
+		btn.add_theme_stylebox_override("hover", _make_flat_box(Color(0.24, 0.62, 0.96, 1.0), Color(0.10, 0.45, 0.85, 1.0), 6))
+		var holder := Control.new()
+		holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(holder)
+		var fr := MgsFontRenderer.new()
+		fr.bind_vfs(_vfs)
+		fr.base_scale = 0.52
+		fr.line_height = 28.0
+		fr.max_line_width = SCREEN_W - 48.0
+		fr.default_color = Color(0.08, 0.14, 0.22, 1.0)
+		fr.shadow_offset = Vector2.ZERO
+		holder.add_child(fr)
+		fr.set_sc3_string(_phone_bytes, int(_phone_offsets[opt_id]), _vm, null, true)
+		var h_est := maxf(46.0, fr.get_content_size().y + 14.0)
+		btn.custom_minimum_size = Vector2(SCREEN_W - 28, h_est)
+		btn.pressed.connect(func():
+			_reply_options.erase(opt_id)
+			_reply_tray_visible = false
+			if _reply_panel != null:
+				_reply_panel.visible = false
+			_msg_scroll.size.y = BODY_H - 122.0
+			_append_sc3_msg(0, opt_id, true)
+			_refresh_reply_prompt()
+			rine_reply_selected.emit(opt_id)
+		)
+		_reply_list.add_child(btn)
 
 
 func toggle_phone() -> void:
@@ -1013,12 +1161,17 @@ func _animate_x(target_x: float) -> void:
 func _on_phone_event(subop: int, args: Array) -> void:
 	# 序章 SG0_PhoneCtrl(5) / SG0_PhoneCtrl(10, 32) 为系统状态准备/隐藏，仅 subop=1 或 (subop=10 && args[0]==1) 为实际来电
 	if subop == 1 or (subop == 10 and args.size() >= 1 and int(args[0]) == 1):
+		unlock_amadeus()
 		_status_label.text = "Amadeus"
 		_amadeus_logo.visible = _amadeus_logo.texture != null
 		_connect_bar.visible = true
+		if _audio != null:
+			var rt_idx: int = _config.phone_ringtone_idx if _config != null else 0
+			_audio.play_se_by_name("SGSE%d.ogg" % (700 + clampi(rt_idx, 0, RINGTONE_NAMES.size() - 1)), true)
 	elif subop == 255 or subop == 5:
 		_amadeus_logo.visible = false
 		_connect_bar.visible = false
+		_stop_ringtone()
 		switch_screen(_current_screen, false)
 
 
@@ -1032,27 +1185,30 @@ func _on_rine_event(subop: int, args: Array) -> void:
 		if args.size() > 0:
 			var raw_cid := int(args[0])
 			_active_contact_idx = clampi(raw_cid, 0, CONTACT_DEFS.size() - 1)
+			unlock_contact(_active_contact_idx)
 			_refresh_chat_header()
 	elif subop == 13:
 		for a in args:
 			var opt_id := int(a)
 			if opt_id > 0 and opt_id < _phone_offsets.size() and not _reply_options.has(opt_id):
 				_reply_options.append(opt_id)
+		_refresh_reply_prompt()
 	elif subop == 15 or subop == 46:
 		var side := int(args[0]) if args.size() > 0 else 1
 		var msg_type := int(args[1]) if args.size() > 1 else 0
 		var payload_id := int(args[2]) if args.size() > 2 else -1
 		var is_self := (side == 0)
+		unlock_contact(_active_contact_idx)
 		if msg_type == 1:
 			if payload_id >= 0 and payload_id < _stickers.size():
 				_append_sticker_msg(payload_id, is_self)
 		else:
 			if payload_id >= 0 and payload_id < _phone_offsets.size():
-				var av_idx := 0 if is_self else (_active_contact_idx % maxi(1, _avatars.size()))
+				var av_idx := 0 if is_self else _get_contact_avatar_idx(_active_contact_idx)
 				_append_sc3_msg(av_idx, payload_id, is_self)
 
 
-func _append_sc3_msg(avatar_idx: int, str_id: int, is_self: bool = false) -> void:
+func _append_sc3_msg(avatar_idx: int, str_id: int, is_self: bool = false, record: bool = true) -> void:
 	if _phone_bytes.is_empty() or str_id < 0 or str_id >= _phone_offsets.size():
 		return
 	var row := HBoxContainer.new()
@@ -1061,7 +1217,7 @@ func _append_sc3_msg(avatar_idx: int, str_id: int, is_self: bool = false) -> voi
 	if not is_self and avatar_idx >= 0 and avatar_idx < _avatars.size() and _avatars[avatar_idx] != null:
 		var av := TextureRect.new()
 		av.texture = _avatars[avatar_idx]
-		av.custom_minimum_size = Vector2(44, 48)
+		av.custom_minimum_size = Vector2(44, 44)
 		av.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		av.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		row.add_child(av)
@@ -1093,18 +1249,19 @@ func _append_sc3_msg(avatar_idx: int, str_id: int, is_self: bool = false) -> voi
 
 	row.add_child(bubble)
 	_msg_list.add_child(row)
-	_messages.append({"type": "sc3", "str_id": str_id, "self": is_self})
+	if record:
+		_record_msg({"type": "sc3", "str_id": str_id, "self": is_self, "avatar_idx": avatar_idx})
 	_scroll_chat_to_bottom()
 
 
-func _append_text_msg(avatar_idx: int, txt: String, is_self: bool) -> void:
+func _append_text_msg(avatar_idx: int, txt: String, is_self: bool, record: bool = true) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.alignment = BoxContainer.ALIGNMENT_END if is_self else BoxContainer.ALIGNMENT_BEGIN
 	if not is_self and avatar_idx >= 0 and avatar_idx < _avatars.size() and _avatars[avatar_idx] != null:
 		var av := TextureRect.new()
 		av.texture = _avatars[avatar_idx]
-		av.custom_minimum_size = Vector2(44, 48)
+		av.custom_minimum_size = Vector2(44, 44)
 		av.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		av.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		row.add_child(av)
@@ -1126,34 +1283,126 @@ func _append_text_msg(avatar_idx: int, txt: String, is_self: bool) -> void:
 
 	row.add_child(bubble)
 	_msg_list.add_child(row)
-	_messages.append({"type": "text", "text": txt, "self": is_self})
+	if record:
+		_record_msg({"type": "text", "text": txt, "self": is_self, "avatar_idx": avatar_idx})
 	_scroll_chat_to_bottom()
 
 
-func _append_sticker_msg(sticker_idx: int, is_self: bool = true) -> void:
+func _append_sticker_msg(sticker_idx: int, is_self: bool = true, record: bool = true) -> void:
 	if sticker_idx < 0 or sticker_idx >= _stickers.size():
 		return
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.alignment = BoxContainer.ALIGNMENT_END if is_self else BoxContainer.ALIGNMENT_BEGIN
+	var av_idx := _get_contact_avatar_idx(_active_contact_idx)
 	if not is_self:
-		var av_idx := _active_contact_idx % maxi(1, _avatars.size())
 		if av_idx >= 0 and av_idx < _avatars.size() and _avatars[av_idx] != null:
 			var av := TextureRect.new()
 			av.texture = _avatars[av_idx]
-			av.custom_minimum_size = Vector2(44, 48)
+			av.custom_minimum_size = Vector2(44, 44)
 			av.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			av.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			row.add_child(av)
 	var tr := TextureRect.new()
 	tr.texture = _stickers[sticker_idx]
-	tr.custom_minimum_size = Vector2(116, 116)
+	tr.custom_minimum_size = Vector2(116, 100)
 	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	row.add_child(tr)
 	_msg_list.add_child(row)
-	_messages.append({"type": "sticker", "idx": sticker_idx, "self": is_self})
+	if record:
+		_record_msg({"type": "sticker", "idx": sticker_idx, "self": is_self, "avatar_idx": av_idx})
 	_scroll_chat_to_bottom()
+
+
+func _record_msg(entry: Dictionary) -> void:
+	_messages.append(entry)
+	var cid := _active_contact_idx
+	if not _messages_by_contact.has(cid):
+		_messages_by_contact[cid] = []
+	(_messages_by_contact[cid] as Array).append(entry)
+
+
+func _rebuild_chat_for_active_contact() -> void:
+	if _msg_list == null:
+		return
+	for c in _msg_list.get_children():
+		_msg_list.remove_child(c)
+		c.queue_free()
+	var list: Array = _messages_by_contact.get(_active_contact_idx, [])
+	for item in list:
+		if not (item is Dictionary):
+			continue
+		var d := item as Dictionary
+		var t := str(d.get("type", ""))
+		var is_self := bool(d.get("self", false))
+		var av := int(d.get("avatar_idx", _get_contact_avatar_idx(_active_contact_idx)))
+		if t == "sc3":
+			_append_sc3_msg(av, int(d.get("str_id", -1)), is_self, false)
+		elif t == "text":
+			_append_text_msg(av, str(d.get("text", "")), is_self, false)
+		elif t == "sticker":
+			_append_sticker_msg(int(d.get("idx", -1)), is_self, false)
+
+
+func reset_phone_state() -> void:
+	_active_contact_idx = 1
+	_amadeus_unlocked = false
+	_unlocked_contacts = {0: true, 1: true, 2: true, 5: true, 6: true, 7: true, 10: true}
+	_messages.clear()
+	_messages_by_contact.clear()
+	_reply_options.clear()
+	_screen_history.clear()
+	_refresh_contacts_visibility()
+	_refresh_reply_prompt()
+	_refresh_chat_header()
+	switch_screen(PhoneScreen.HOME, false)
+
+
+func export_state() -> Dictionary:
+	var uc := []
+	for k in _unlocked_contacts.keys():
+		if bool(_unlocked_contacts[k]):
+			uc.append(int(k))
+	var mbc := {}
+	for cid in _messages_by_contact.keys():
+		mbc[str(cid)] = (_messages_by_contact[cid] as Array).duplicate(true)
+	return {
+		"active_contact_idx": _active_contact_idx,
+		"amadeus_unlocked": _amadeus_unlocked,
+		"unlocked_contacts": uc,
+		"messages_by_contact": mbc,
+		"reply_options": Array(_reply_options),
+	}
+
+
+func import_state(st: Dictionary) -> void:
+	if st.is_empty():
+		reset_phone_state()
+		return
+	_active_contact_idx = int(st.get("active_contact_idx", 1))
+	_amadeus_unlocked = bool(st.get("amadeus_unlocked", false))
+	_unlocked_contacts.clear()
+	for k in st.get("unlocked_contacts", [0, 1, 2, 5, 6, 7, 10]):
+		_unlocked_contacts[int(k)] = true
+	_messages.clear()
+	_messages_by_contact.clear()
+	var mbc: Variant = st.get("messages_by_contact", {})
+	if mbc is Dictionary:
+		for cid_str in (mbc as Dictionary).keys():
+			var cid := int(cid_str)
+			var arr: Array = []
+			for m in (mbc as Dictionary)[cid_str]:
+				if m is Dictionary:
+					arr.append((m as Dictionary).duplicate(true))
+					_messages.append(m as Dictionary)
+			_messages_by_contact[cid] = arr
+	_reply_options.clear()
+	for r in st.get("reply_options", []):
+		_reply_options.append(int(r))
+	_refresh_contacts_visibility()
+	_refresh_reply_prompt()
+	_refresh_chat_header()
 
 
 func _scroll_chat_to_bottom() -> void:

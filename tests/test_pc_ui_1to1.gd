@@ -343,6 +343,40 @@ func _run() -> void:
 		DirAccess.remove_absolute(ConfigManager.CONFIG_PATH)
 	print("[8/8] Exact DDS slices, RINE event decoder & Config v2 migration ok")
 
+	# 9. 防回归：RINE 头像/贴纸精确切片 + 候选回复列表 + 标题读档现场完整恢复
+	var avs := loader.get_rine_avatars()
+	_check(avs.size() == 12 and (avs[0] as Texture2D).get_size() == Vector2(90, 90),
+		"RINE 头像应为 12 枚 90x90 精确切片")
+	var stks := loader.get_rine_stickers()
+	_check(stks.size() == 21, "RINE 贴纸应为 21 枚 (3x7)")
+	_check(pd_chk._get_contact_avatar_idx(10) == 9 and pd_chk._get_contact_avatar_idx(9) == 10,
+		"阿万音由季(10)->avatar 9, 椎名篝(9)->avatar 10 索引必须正确")
+	_check(pd_chk._amadeus_btn != null and not pd_chk._amadeus_btn.visible,
+		"序章初始桌面不应显示未解锁的 Amadeus 图标")
+	pd_chk._on_rine_event(13, [10, 11])
+	_check(pd_chk._reply_options.size() == 2, "RINE subop=13 应注册 2 个候选回复")
+	pd_chk._toggle_reply_tray()
+	_check(pd_chk._reply_panel.visible and pd_chk._reply_list.get_child_count() == 2,
+		"点击输入栏应弹出 2 个真实候选回复选项")
+
+	# 舞台背景+立绘+台词 存档 -> 返回标题清空舞台 -> 读档完整恢复
+	main_node.stage.load_bg_by_index(0, 1)
+	main_node.stage.flush_transitions()
+	_check(main_node.stage.get_bg_texture(0) != null, "测试前舞台 BG 0 应已加载")
+	var reg_slot := 46
+	UiPanels.set_slot_locked(reg_slot, false)
+	main_node._on_save_slot(reg_slot)
+	main_node.return_to_title()
+	_check(main_node.stage.get_bg_texture(0) == null, "返回标题后舞台 BG 0 应已清空")
+	main_node._on_load_slot(reg_slot)
+	_check(main_node.stage.get_bg_texture(0) != null, "从标题读档后舞台 BG 0 必须完整恢复，不可灰屏缺失")
+	_check(main_node.stage.visible and main_node._running_story, "读档后舞台与剧情状态应激活")
+	if FileAccess.file_exists(UiPanels.get_slot_path(reg_slot)):
+		DirAccess.remove_absolute(UiPanels.get_slot_path(reg_slot))
+	if FileAccess.file_exists(UiPanels.get_slot_thumb_path(reg_slot)):
+		DirAccess.remove_absolute(UiPanels.get_slot_thumb_path(reg_slot))
+	print("[9/9] RINE avatars/stickers/reply-tray & title-load stage recovery ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)

@@ -24,7 +24,10 @@ func _run() -> void:
 	var mes_a := loader.get_meswin_assets()
 	assert(mes_a["box"] != null and (mes_a["box"] as Texture2D).get_height() == 318, "MESWIN 底板切片尺寸异常")
 	var stickers := loader.get_rine_stickers()
-	assert(stickers.size() == 18, "RINE 表情贴纸数量应为 18")
+	assert(stickers.size() == 21, "RINE 表情贴纸数量应为 21")
+	var avatars := loader.get_rine_avatars()
+	assert(avatars.size() == 12, "RINE 头像数量应为 12")
+	assert(avatars[0] != null and (avatars[0] as Texture2D).get_size() == Vector2(90, 90), "RINE 头像单帧尺寸应为 90x90")
 	print("UiThemeLoader ok: title_bg=", (title_a["bg"] as Texture2D).get_size(), " stickers=", stickers.size())
 
 	# 挂载主场景测试完整链路

@@ -964,3 +964,113 @@ func play_mask_wipe(mask_id: int, duration_frames: int = 30) -> void:
 		if is_instance_valid(_wipe_overlay):
 			_wipe_overlay.visible = false
 	)
+
+
+## 导出当前舞台背景/图片/立绘图层状态（供存档使用）
+func export_state() -> Dictionary:
+	var bg_list: Array = []
+	for lid in _bg_layers.keys():
+		var info: Dictionary = _bg_layers[lid]
+		var sp := info.get("sprite", null) as Sprite2D
+		var vis := is_instance_valid(sp) and sp.visible
+		if bool(info.get("is_color", false)):
+			var col := sp.modulate if is_instance_valid(sp) else Color.BLACK
+			bg_list.append({
+				"layer": int(lid),
+				"is_color": true,
+				"color": [col.r, col.g, col.b, col.a],
+				"visible": vis,
+			})
+		else:
+			var bg_idx := int(info.get("bg_idx", -1))
+			if bg_idx >= 0:
+				bg_list.append({
+					"layer": int(lid),
+					"is_color": false,
+					"bg_idx": bg_idx,
+					"visible": vis,
+				})
+
+	var pic_list: Array = []
+	for sid in _pic_layers.keys():
+		var pinfo: Dictionary = _pic_layers[sid]
+		var psp := pinfo.get("sprite", null) as Sprite2D
+		pic_list.append({
+			"surf_id": int(sid),
+			"file_id": int(pinfo.get("file_id", -1)),
+			"visible": is_instance_valid(psp) and psp.visible,
+		})
+
+	var chara_list: Array = []
+	for cslot in _chara_slots.keys():
+		var cinfo: Dictionary = _chara_slots[cslot]
+		var csp := cinfo.get("sprite", null) as Sprite2D
+		chara_list.append({
+			"slot": int(cslot),
+			"chara_idx": int(cinfo.get("chara_idx", -1)),
+			"group_hint": int(cinfo.get("group_hint", 1)),
+			"visible": is_instance_valid(csp) and csp.visible,
+		})
+
+	return {
+		"bg_layers": bg_list,
+		"pic_layers": pic_list,
+		"chara_slots": chara_list,
+	}
+
+
+## 从存档状态完整还原舞台背景、图片与立绘
+func import_state(st: Dictionary) -> void:
+	reset_stage()
+	if st.is_empty():
+		return
+
+	for b in st.get("bg_layers", []):
+		if not (b is Dictionary):
+			continue
+		var bd := b as Dictionary
+		var lid := int(bd.get("layer", 0))
+		var vis := bool(bd.get("visible", true))
+		if bool(bd.get("is_color", false)):
+			var carr: Array = bd.get("color", [0.0, 0.0, 0.0, 1.0])
+			var col := Color(
+				float(carr[0]) if carr.size() > 0 else 0.0,
+				float(carr[1]) if carr.size() > 1 else 0.0,
+				float(carr[2]) if carr.size() > 2 else 0.0,
+				float(carr[3]) if carr.size() > 3 else 1.0
+			)
+			load_bg_color(lid, col)
+		else:
+			var bg_idx := int(bd.get("bg_idx", -1))
+			if bg_idx >= 0:
+				load_bg_by_index(lid, bg_idx)
+		if _bg_layers.has(lid):
+			var sp := _bg_layers[lid].get("sprite", null) as Sprite2D
+			if is_instance_valid(sp):
+				sp.visible = vis
+
+	for p in st.get("pic_layers", []):
+		if not (p is Dictionary):
+			continue
+		var pd := p as Dictionary
+		var sid := int(pd.get("surf_id", -1))
+		var fid := int(pd.get("file_id", -1))
+		if sid >= 0 and fid >= 0 and load_pic(sid, 0, fid):
+			set_pic_visible(sid, bool(pd.get("visible", true)))
+
+	for c in st.get("chara_slots", []):
+		if not (c is Dictionary):
+			continue
+		var cd := c as Dictionary
+		var cslot := int(cd.get("slot", -1))
+		var cidx := int(cd.get("chara_idx", -1))
+		var gh := int(cd.get("group_hint", 1))
+		if cslot >= 0 and cidx >= 0 and load_chara(cslot, cidx, gh):
+			if _chara_slots.has(cslot):
+				var csp := _chara_slots[cslot].get("sprite", null) as Sprite2D
+				if is_instance_valid(csp):
+					csp.visible = bool(cd.get("visible", true))
+
+	flush_transitions()
+	_relayout_chara_slots()
+	stage_updated.emit()

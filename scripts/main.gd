@@ -26,6 +26,7 @@ var _line_read_flag: bool = false
 var _play_time_sec: float = 0.0
 var _sc3_frame_accum: float = 0.0
 var _pending_save_thumb: Image = null
+var _last_dialogue_entry: Dictionary = {}
 
 var _cli_game_dir: String = ""
 var _cli_movie_dir: String = ""
@@ -323,6 +324,8 @@ func start_new_game() -> void:
 	gesture_helper.set_movie_playing(false)
 	_update_mode_indicators()
 	stage.reset_stage()
+	phone_drawer.reset_phone_state()
+	_last_dialogue_entry.clear()
 	vm.start_boot_script()
 	for _f in range(15):
 		vm.step_frame(1)
@@ -352,6 +355,8 @@ func return_to_title() -> void:
 	audio.stop_voice()
 	stage.reset_stage()
 	phone_drawer.close_phone()
+	phone_drawer.reset_phone_state()
+	_last_dialogue_entry.clear()
 	if panels != null:
 		panels.close_all_modals()
 	if tips_panel != null:
@@ -485,6 +490,8 @@ func _update_mode_indicators() -> void:
 func _on_vm_dialogue(buf: PackedByteArray, soff: int, _cid: int, _vid: int, _sid: int, is_read: bool) -> void:
 	_line_read_flag = is_read
 	_auto_timer = 0.0
+	if vm != null and not vm.backlog.is_empty():
+		_last_dialogue_entry = (vm.backlog.back() as Dictionary).duplicate(true)
 	if gesture_helper != null:
 		gesture_helper.update_date_display(vm)
 	if vm != null and vm.backlog.size() % 20 == 0:
@@ -493,6 +500,7 @@ func _on_vm_dialogue(buf: PackedByteArray, soff: int, _cid: int, _vid: int, _sid
 
 
 func _on_vm_dialogue_clear() -> void:
+	_last_dialogue_entry.clear()
 	panels.clear_dialogue_line()
 
 
@@ -506,7 +514,7 @@ func _on_vm_choices_requested(choices: Array) -> void:
 	_skip_mode = false
 	_update_mode_indicators()
 	if config != null and (config.auto_quicksave_mode == 1 or config.auto_quicksave_mode == 2):
-		UiPanels.write_slot_data(99, vm.export_state(), "自动分支点存档", int(_play_time_sec))
+		UiPanels.write_slot_data(99, _build_save_state(), "自动分支点存档", int(_play_time_sec))
 		if panels != null:
 			panels.show_quicksaved_toast()
 	panels.show_choices(choices)
@@ -523,9 +531,27 @@ func _on_vm_trigger_event(subop: int, args: Array) -> void:
 func _on_vm_script_switched(_sname: String) -> void:
 	# 按设置决定是否自动快速存档留存最近切换脚本进度 (0=场景, 2=双方)
 	if config == null or config.auto_quicksave_mode == 0 or config.auto_quicksave_mode == 2:
-		UiPanels.write_slot_data(99, vm.export_state(), "自动章节切换", int(_play_time_sec))
+		UiPanels.write_slot_data(99, _build_save_state(), "自动章节切换", int(_play_time_sec))
 		if panels != null:
 			panels.show_quicksaved_toast()
+
+
+func _build_save_state() -> Dictionary:
+	var st := vm.export_state()
+	if stage != null:
+		st["stage_state"] = stage.export_state()
+	if audio != null:
+		st["audio_state"] = {
+			"bgm_idx": audio.get_current_bgm_idx(),
+			"bgm_loop": audio.is_current_bgm_loop(),
+		}
+	if phone_drawer != null:
+		st["phone_state"] = phone_drawer.export_state()
+	if not _last_dialogue_entry.is_empty():
+		st["dialogue_state"] = _last_dialogue_entry.duplicate(true)
+	if vm != null and not vm.backlog.is_empty():
+		st["backlog"] = vm.backlog.duplicate(true)
+	return st
 
 
 func _capture_pending_thumb() -> void:
@@ -545,7 +571,7 @@ func _on_save_slot(slot_id: int) -> void:
 		if vp != null and vp.get_texture() != null:
 			thumb = vp.get_texture().get_image()
 	_pending_save_thumb = null
-	UiPanels.write_slot_data(slot_id, vm.export_state(), summary, int(_play_time_sec), thumb)
+	UiPanels.write_slot_data(slot_id, _build_save_state(), summary, int(_play_time_sec), thumb)
 	panels.refresh_title_status()
 
 
@@ -553,14 +579,70 @@ func _on_load_slot(slot_id: int) -> void:
 	var meta := UiPanels.read_slot_meta(slot_id)
 	var st: Variant = meta.get("vm_state", null)
 	if st is Dictionary and vm.import_state(st as Dictionary):
+		var sd := st as Dictionary
 		_running_story = true
 		_auto_mode = false
 		_skip_mode = false
 		_sc3_frame_accum = 0.0
 		if video != null and video.is_movie_playing():
 			video.stop_movie(false)
-		stage.visible = true
+		if audio != null:
+			audio.stop_voice()
+		if panels != null:
+			panels.close_all_modals()
+		if tips_panel != null:
+			tips_panel.visible = false
+		if gallery != null:
+			gallery.visible = false
+		if phone_drawer != null:
+			phone_drawer.close_phone()
+
+		# 1. 完整还原舞台（背景图层、PIC 图层、立绘槽位与可见性）
+		if stage != null:
+			stage.visible = true
+			if sd.has("stage_state") and sd["stage_state"] is Dictionary:
+				stage.import_state(sd["stage_state"] as Dictionary)
+			else:
+				stage.reset_stage()
+
+		# 2. 还原 BGM
+		if audio != null and sd.has("audio_state") and sd["audio_state"] is Dictionary:
+			var ast := sd["audio_state"] as Dictionary
+			var bgm_idx := int(ast.get("bgm_idx", -1))
+			if bgm_idx >= 0:
+				audio.play_bgm(bgm_idx, bool(ast.get("bgm_loop", true)), 0)
+			else:
+				audio.stop_bgm(0)
+
+		# 3. 还原手机/RINE 状态
+		if phone_drawer != null:
+			if sd.has("phone_state") and sd["phone_state"] is Dictionary:
+				phone_drawer.import_state(sd["phone_state"] as Dictionary)
+			else:
+				phone_drawer.reset_phone_state()
+
+		# 4. 还原回顾记录与当前屏幕上的对白
+		vm.backlog.clear()
+		for b_item in sd.get("backlog", []):
+			if b_item is Dictionary:
+				vm.backlog.append((b_item as Dictionary).duplicate(true))
+
+		_last_dialogue_entry.clear()
+		var d_st: Variant = sd.get("dialogue_state", null)
+		if d_st is Dictionary and not (d_st as Dictionary).is_empty():
+			var dd := d_st as Dictionary
+			_last_dialogue_entry = dd.duplicate(true)
+			var sc_name := str(dd.get("script", ""))
+			var soff := int(dd.get("str_offset", -1))
+			if sc_name != "" and soff >= 0 and vfs != null and vfs.is_mounted:
+				var sc_bytes := vfs.read_entry("script.mpk", sc_name)
+				if not sc_bytes.is_empty():
+					panels.show_dialogue_line(sc_bytes, soff, true)
+		else:
+			panels.clear_dialogue_line()
+
 		gesture_helper.set_movie_playing(false)
+		gesture_helper.update_date_display(vm)
 		_play_time_sec = float(meta.get("play_time_sec", 0))
 		_update_mode_indicators()
 		panels.show_dialogue_mode()

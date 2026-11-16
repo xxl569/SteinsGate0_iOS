@@ -421,3 +421,13 @@ func get_voice_mouth_level() -> int:
 	# Dummy 音频后端无实时波形峰值时使用稳定音节节拍
 	var tick := int(_voice_elapsed * 12.0) % 4
 	return 2 if tick == 1 else (1 if tick == 0 or tick == 2 else 0)
+
+
+func get_current_bgm_idx() -> int:
+	if _bgm_player != null and _bgm_player.playing:
+		return _current_bgm_idx
+	return -1
+
+
+func is_current_bgm_loop() -> bool:
+	return _bgm_loop_enabled

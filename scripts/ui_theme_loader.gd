@@ -275,19 +275,21 @@ func get_tips_assets() -> Dictionary:
 	}
 
 
-## 切片 PHONE_RINE.DDS 的 12 个头像与 18 枚中文化表情贴纸
+## 切片 PHONE_RINE.DDS 的 12 个头像 (90x90, 步进 96) 与 21 枚表情贴纸 (202x174, 3列x7行)
 func get_rine_stickers() -> Array[Texture2D]:
 	var stickers: Array[Texture2D] = []
 	var sheet := get_sheet("PHONE_RINE.DDS")
 	if sheet == null:
 		return stickers
-	# 右侧 3 列 x 6 行贴纸区 (x: 96..704, y: 0..1216)
+	# 右侧 3 列 x 7 行贴纸区 (x: 96..702, y: 0..1216)
 	var start_x := 96
 	var cell_w := 202
-	var cell_h := 202
-	for row in range(6):
+	var stride_y := 174
+	for row in range(7):
 		for col in range(3):
-			stickers.append(get_region("PHONE_RINE.DDS", Rect2i(start_x + col * cell_w, row * cell_h, cell_w, cell_h)))
+			var sy := row * stride_y
+			var sh := mini(stride_y, 1216 - sy)
+			stickers.append(get_region("PHONE_RINE.DDS", Rect2i(start_x + col * cell_w, sy, cell_w, sh)))
 	return stickers
 
 
@@ -296,9 +298,10 @@ func get_rine_avatars() -> Array[Texture2D]:
 	var sheet := get_sheet("PHONE_RINE.DDS")
 	if sheet == null:
 		return avatars
-	var cell_h := 101
+	# 左侧 12 行头像区：每枚实际 90x90，行步进 96px（含 6px 透明间隔）
+	var stride_y := 96
 	for row in range(12):
-		avatars.append(get_region("PHONE_RINE.DDS", Rect2i(0, row * cell_h, 90, cell_h)))
+		avatars.append(get_region("PHONE_RINE.DDS", Rect2i(0, row * stride_y, 90, 90)))
 	return avatars
 
 
