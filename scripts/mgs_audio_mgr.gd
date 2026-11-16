@@ -308,6 +308,31 @@ func stop_se(channel: int = -1) -> void:
 		_se_pool_ids[channel] = -1
 
 
+## 按 se.mpk 条目名直接播放音效（用于手机来电铃声试听 SGSE700.ogg..SGSE706.ogg）
+func play_se_by_name(entry_name: String, loop: bool = false) -> bool:
+	_ensure_players()
+	if _vfs == null or not _vfs.is_mounted or entry_name == "":
+		return false
+	var idx := _vfs.get_archive_entry_index("se.mpk", entry_name)
+	if idx >= 0:
+		return play_se(idx, loop)
+	var raw := _vfs.read_entry("se.mpk", entry_name)
+	if raw.is_empty():
+		return false
+	var stream := AudioStreamOggVorbis.load_from_buffer(raw)
+	if stream == null:
+		return false
+	stream.loop = loop
+	var slot_idx := _se_cursor % _se_pool.size()
+	var player: AudioStreamPlayer = _se_pool[slot_idx]
+	_se_cursor += 1
+	player.stop()
+	player.stream = stream
+	_se_pool_ids[slot_idx] = -2
+	player.play()
+	return true
+
+
 func _resolve_voice_char_slot(entry_name: String, fallback_char_id: int) -> int:
 	var stem := entry_name.get_basename().to_upper()
 	var parts := stem.split("_")

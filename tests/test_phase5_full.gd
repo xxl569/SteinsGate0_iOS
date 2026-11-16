@@ -173,6 +173,62 @@ func _run() -> void:
 	assert(m0_switched.has("SG0_00_01.scx") and m0_switched.has("SG0_00_02.scx"),
 		"MAIN00 未能从 SG0_00_01 自动过渡到 SG0_00_02，实际切换: %s" % [str(m0_switched)])
 
+	# 7. 立绘释放 / 纯色背景 / 日期变量 11/23 防回归校验
+	var st_reg := MgsStage.new()
+	get_root().add_child(st_reg)
+	st_reg.bind_vfs(vfs)
+	var vm_reg := Sc3Vm.new(vfs)
+	st_reg.bind_vm(vm_reg)
+	vm_reg.start_boot_script()
+	for _f in range(15):
+		vm_reg.step_frame(1)
+	assert(vm_reg.jump_to_script("MAIN00.scx", 2), "回归验证跳转 MAIN00 失败")
+	var checked_str23 := false
+	var checked_multi := false
+	var entered_02 := false
+	for _t in range(4500):
+		vm_reg.step_frame(1)
+		if vm_reg.is_waiting_for_movie() or vm_reg._movie_playing:
+			vm_reg.notify_movie_finished()
+		var cur_sc := ""
+		if vm_reg._threads.size() > 0:
+			var sc_slot: int = vm_reg._threads[0].script_slot
+			if vm_reg._scripts.has(sc_slot):
+				cur_sc = str(vm_reg._scripts[sc_slot]["name"])
+		if cur_sc == "SG0_00_01.scx" and not checked_multi and vm_reg.backlog.size() >= 10:
+			var vis_xs: Array[float] = []
+			for sid in st_reg._chara_slots.keys():
+				var sp_k := st_reg._chara_slots[sid].get("sprite", null) as Sprite2D
+				if is_instance_valid(sp_k) and sp_k.visible:
+					assert(int(sid) < 16, "暂存立绘槽 %d 不应直接在前台显示" % int(sid))
+					vis_xs.append(sp_k.position.x)
+			if vis_xs.size() >= 2:
+				checked_multi = true
+				var all_same := true
+				for vx in vis_xs:
+					if absf(vx - vis_xs[0]) > 5.0:
+						all_same = false
+				assert(not all_same, "同屏多名角色不应叠在同一 X 坐标: %s" % str(vis_xs))
+		if cur_sc == "SG0_00_01.scx" and not checked_str23 and vm_reg.backlog.size() >= 24:
+			checked_str23 = true
+			assert(st_reg.get_chara_count() <= 2, "SG0_00_01 str=23 后桶子应已释放，剩余立绘数: %d" % st_reg.get_chara_count())
+		if cur_sc == "SG0_00_02.scx" and vm_reg.is_waiting_for_click():
+			entered_02 = true
+			break
+		if vm_reg.is_waiting_for_click():
+			vm_reg.notify_user_advance()
+	assert(entered_02, "回归验证未能进入 SG0_00_02.scx 首句")
+	assert(st_reg._bg_layers.has(0) and is_instance_valid(st_reg._bg_layers[0].get("sprite", null)) and (st_reg._bg_layers[0]["sprite"] as Sprite2D).visible,
+		"进入 SG0_00_02 UPX 场景后 0 号背景层必须可见，防止 10:02+10:10 导致黑屏")
+	assert(st_reg.get_chara_count() == 0, "进入 SG0_00_02 UPX 场景后上一幕立绘必须已全部释放，实际: %d" % st_reg.get_chara_count())
+	assert(vm_reg.get_scr_work(11) == 2010 and vm_reg.get_scr_work(12) == 11 and vm_reg.get_scr_work(13) == 23,
+		"SG0_00_02 应计算出日期 2010/11/23，实际: %d/%d/%d" % [vm_reg.get_scr_work(11), vm_reg.get_scr_work(12), vm_reg.get_scr_work(13)])
+	st_reg.load_bg_color(0, Color(0, 0, 0, 1))
+	assert(st_reg.get_bg_count() >= 1, "纯色黑屏 SG0_BgChaCtrl 应在舞台生成背景色块层")
+	st_reg.reset_stage()
+	st_reg.queue_free()
+	print("Portrait release, solid color BG & 2010/11/23 date parity ok")
+
 	var vp_chk := MgsVideoPlayer.new()
 	get_root().add_child(vp_chk)
 	vp_chk.bind_vfs(vfs)

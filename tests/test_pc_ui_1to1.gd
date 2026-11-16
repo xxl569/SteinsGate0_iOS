@@ -91,6 +91,14 @@ func _run() -> void:
 
 	var tp_a := loader.get_tips_assets()
 	_check(tp_a["bg"] != null and tp_a["grid_frame"] != null and (tp_a["tabs_active"] as Array).size() == 4, "Tips 图集切片异常")
+
+	var mw_a := loader.get_meswin_assets()
+	_check(mw_a.get("accent_left", null) != null and (mw_a["accent_left"] as Texture2D).get_width() <= 165,
+		"说话人名左翼切片应裁除尾部 '0' 字形")
+	_check(mw_a.get("date_pill_bg", null) != null and (mw_a["date_pill_bg"] as Texture2D).get_height() <= 140,
+		"日期胶囊切片不应包含上方 wait_ring 边缘")
+	_check(mw_a.get("auto_btn_off", null) != null and mw_a.get("skip_btn_off", null) != null,
+		"MESWIN AUTO/SKIP 按钮切片缺失")
 	print("[2/7] UiThemeLoader 1:1 PC assets ok")
 
 	# 3. 加载主场景验证 HUD 位置、弹窗拦截与全部 PC 面板功能
@@ -107,16 +115,55 @@ func _run() -> void:
 		if main_node.vm.is_waiting_for_click():
 			break
 
-	var hud := main_node.gesture_helper._hud_container
-	_check(hud != null and hud.visible, "进入剧情后悬浮 HUD 应可见")
-	_check(hud.anchor_left == 0.0 and hud.anchor_right == 0.0, "悬浮 HUD 必须锚定在左上角而非右上角")
-	_check(hud.offset_left >= 14.0 and hud.offset_right <= 1100.0, "悬浮 HUD 应位于屏幕左上区域 (offset_left=%s, right=%s)" % [hud.offset_left, hud.offset_right])
+	var date_btn := main_node.gesture_helper._date_phone_btn
+	var hud_left := main_node.gesture_helper._bottom_left_hud
+	var hud_right := main_node.gesture_helper._bottom_right_hud
+	_check(date_btn != null and date_btn.visible, "进入剧情后左上角日期/手机按钮应可见")
+	_check(date_btn.offset_left <= 40.0 and date_btn.offset_top <= 40.0 and date_btn.offset_right < 350.0,
+		"左上角日期按钮应位于左上角 (left=%s, right=%s)" % [date_btn.offset_left, date_btn.offset_right])
+	_check(hud_left != null and hud_left.visible and hud_left.offset_top >= 1000.0 and hud_left.offset_right < 720.0,
+		"左下角快捷栏应位于左下区域且留出正下方名字空档")
+	_check(hud_right != null and hud_right.visible and hud_right.offset_top >= 1000.0 and hud_right.offset_left >= 1180.0,
+		"右下角系统栏应位于右下区域且留出正下方名字空档")
 
-	# 打开 RINE 手机抽屉（位于右侧 x>=1290），确认不重叠
-	main_node.phone_drawer.open_phone()
-	_check(hud.offset_right < 1290.0, "左上角 HUD 不得与右侧手机抽屉重叠")
-	main_node.phone_drawer.close_phone()
-	print("[3/7] MobileGestureHelper top-left HUD & non-overlap ok")
+	var accent := main_node.panels._meswin_accent
+	_check(accent != null, "正下方说话人名装饰框应存在")
+	var accent_center_x := accent.position.x + accent.size.x * 0.5
+	_check(absf(accent_center_x - 960.0) <= 20.0 and accent.position.y >= 1000.0,
+		"说话人名装饰框应位于正下方居中 (cx=%s, y=%s)" % [accent_center_x, accent.position.y])
+
+	# 验证点击左上角日期胶囊可弹出手机 / RINE 抽屉，并测试桌面->通讯录->RINE->设置->12壁纸->7铃声全页面
+	date_btn.pressed.emit()
+	_check(main_node.phone_drawer.is_phone_open(), "点击左上角日期按钮应打开手机抽屉")
+	var pd := main_node.phone_drawer
+	_check(pd._screen_root != null and pd._frame_tex != null and pd._screen_root.get_index() > pd._frame_tex.get_index(),
+		"手机屏幕图层必须位于外框 _frame_tex 之上，防止被不透明黑色开孔区域遮挡")
+	_check(pd._screen_root.position == Vector2(118, 124) and pd._screen_root.size == Vector2(454, 794),
+		"手机屏幕开孔区域尺寸异常: %s / %s" % [pd._screen_root.position, pd._screen_root.size])
+	_check(main_node.gesture_helper._btn_auto.get_theme_stylebox("normal") is StyleBoxTexture and main_node.gesture_helper._btn_skip.get_theme_stylebox("normal") is StyleBoxTexture,
+		"左下角 AUTO/SKIP 按钮应绑定 PC StyleBoxTexture")
+	_check(pd._wallpapers.size() == 12, "手机应加载 12 张 PWCG 壁纸，实际: %d" % pd._wallpapers.size())
+	_check(pd._ringtone_btns.size() == 7, "手机应提供 7 首 PC 原版铃声，实际: %d" % pd._ringtone_btns.size())
+	pd.switch_screen(UiPhoneRine.PhoneScreen.WALLPAPER)
+	pd.select_wallpaper(5)
+	_check(main_node.config.phone_wallpaper_idx == 5, "壁纸选择应同步并持久化到 ConfigManager")
+	pd.switch_screen(UiPhoneRine.PhoneScreen.RINGTONE)
+	pd.select_ringtone(6, false)
+	_check(main_node.config.phone_ringtone_idx == 6, "铃声选择应同步并持久化到 ConfigManager")
+	pd.switch_screen(UiPhoneRine.PhoneScreen.HOME)
+	pd.close_phone()
+	_check(not main_node.phone_drawer.is_phone_open(), "收起手机抽屉失败")
+
+	# 验证点击快进 SKIP 在未读状态下不会立刻自我取消
+	main_node.config.skip_unread = true
+	main_node.gesture_helper._btn_skip.pressed.emit()
+	_check(main_node._skip_mode, "点击快进按钮后 _skip_mode 应激活")
+	main_node._process(0.05)
+	_check(main_node._skip_mode, "未读文本下开启快进时不应在首帧自动熄灭")
+	main_node._toggle_skip_mode()
+
+	var hud := main_node.gesture_helper._hud_container
+	print("[3/7] PC-layout Date Pill + Bottom-Left/Right HUD + Center Speaker + Phone/RINE & Skip ok")
 
 	# 4. Config 面板 4 分页切换、角色静音联动与重置默认
 	main_node.panels.open_config(0)

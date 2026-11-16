@@ -15,6 +15,7 @@ signal load_slot_requested(slot_id: int)
 signal retry_byoa_requested()
 signal config_applied()
 signal modal_visibility_changed(any_open: bool)
+signal ui_hidden_changed(hidden: bool)
 
 const SAVE_DIR := "user://saves"
 const NUM_SAVE_SLOTS := 48
@@ -32,13 +33,21 @@ var _btn_continue: Button = null
 
 var _dialogue_view: Control = null
 var _meswin_plate: TextureRect = null
-var _meswin_accent: TextureRect = null
+var _meswin_accent: Control = null
+var _accent_left: TextureRect = null
+var _accent_right: TextureRect = null
 var _name_renderer: MgsFontRenderer = null
 var _body_renderer: MgsFontRenderer = null
 var _mode_badge: Label = null
+var _mode_ring: TextureRect = null
+var _auto_ring_tex: Texture2D = null
+var _skip_ring_tex: Texture2D = null
 var _wait_cursor: Label = null
+var _wait_ring: TextureRect = null
 var _choices_panel: PanelContainer = null
 var _choices_box: VBoxContainer = null
+var _quicksave_toast: TextureRect = null
+var _quicksave_timer: float = 0.0
 
 var _modal_layer: Control = null
 var _backlog_view: UiBacklogPanel = null
@@ -187,44 +196,97 @@ func _build_dialogue_view() -> void:
 	_meswin_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dialogue_view.add_child(_meswin_plate)
 
-	_meswin_accent = TextureRect.new()
-	_meswin_accent.position = Vector2(140, 756)
-	_meswin_accent.size = Vector2(340, 36)
-	_meswin_accent.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_meswin_accent.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	# PC 原版样式：说话人名称与两侧橙色光翼居中置于对话框正下方（无名旁白时自动隐藏）
+	_meswin_accent = Control.new()
+	_meswin_accent.name = "SpeakerNameBracket"
+	_meswin_accent.position = Vector2(760, 1028)
+	_meswin_accent.size = Vector2(400, 32)
 	_meswin_accent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_meswin_accent.visible = false
 	_dialogue_view.add_child(_meswin_accent)
+
+	_accent_left = TextureRect.new()
+	_accent_left.position = Vector2(0, 2)
+	_accent_left.size = Vector2(158, 28)
+	_accent_left.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_accent_left.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_accent_left.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_meswin_accent.add_child(_accent_left)
+
+	_accent_right = TextureRect.new()
+	_accent_right.position = Vector2(242, 2)
+	_accent_right.size = Vector2(158, 28)
+	_accent_right.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_accent_right.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_accent_right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_meswin_accent.add_child(_accent_right)
 
 	_name_renderer = MgsFontRenderer.new()
 	_name_renderer.name = "SpeakerNameRenderer"
-	_name_renderer.position = Vector2(180, 774)
-	_name_renderer.base_scale = 0.76
-	_name_renderer.default_color = Color(1.0, 0.78, 0.35)
+	_name_renderer.position = Vector2(960, 1024)
+	_name_renderer.base_scale = 0.72
+	_name_renderer.default_color = Color(1.0, 0.80, 0.36)
+	_name_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dialogue_view.add_child(_name_renderer)
 
 	_body_renderer = MgsFontRenderer.new()
 	_body_renderer.name = "BodyTextRenderer"
-	_body_renderer.position = Vector2(210, 826)
+	_body_renderer.position = Vector2(240, 796)
 	_body_renderer.base_scale = 0.70
 	_body_renderer.line_height = 50.0
-	_body_renderer.max_line_width = 1480.0
+	_body_renderer.max_line_width = 1420.0
+	_body_renderer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dialogue_view.add_child(_body_renderer)
 
+	_mode_ring = TextureRect.new()
+	_mode_ring.name = "ModeRingBadge"
+	_mode_ring.position = Vector2(1690, 845)
+	_mode_ring.size = Vector2(124, 124)
+	_mode_ring.pivot_offset = Vector2(62, 62)
+	_mode_ring.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_mode_ring.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_mode_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mode_ring.visible = false
+	_dialogue_view.add_child(_mode_ring)
+
 	_mode_badge = Label.new()
-	_mode_badge.position = Vector2(1660, 780)
-	_mode_badge.size = Vector2(210, 34)
+	_mode_badge.position = Vector2(1650, 774)
+	_mode_badge.size = Vector2(240, 32)
 	_mode_badge.add_theme_font_size_override("font_size", 20)
-	_mode_badge.modulate = Color(1.0, 0.65, 0.18)
+	_mode_badge.modulate = Color(1.0, 0.68, 0.22)
 	_mode_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_mode_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dialogue_view.add_child(_mode_badge)
+
+	_wait_ring = TextureRect.new()
+	_wait_ring.name = "WaitRingCursor"
+	_wait_ring.position = Vector2(1676, 932)
+	_wait_ring.size = Vector2(40, 40)
+	_wait_ring.pivot_offset = Vector2(20, 20)
+	_wait_ring.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_wait_ring.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_wait_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wait_ring.visible = false
+	_dialogue_view.add_child(_wait_ring)
 
 	_wait_cursor = Label.new()
 	_wait_cursor.text = "▼"
-	_wait_cursor.position = Vector2(1720, 995)
+	_wait_cursor.position = Vector2(1680, 936)
 	_wait_cursor.add_theme_font_size_override("font_size", 26)
 	_wait_cursor.modulate = Color(1.0, 0.68, 0.22)
+	_wait_cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_wait_cursor.visible = false
 	_dialogue_view.add_child(_wait_cursor)
+
+	_quicksave_toast = TextureRect.new()
+	_quicksave_toast.name = "QuickSavedGear"
+	_quicksave_toast.position = Vector2(28, 868)
+	_quicksave_toast.size = Vector2(168, 134)
+	_quicksave_toast.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_quicksave_toast.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_quicksave_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_quicksave_toast.visible = false
+	_dialogue_view.add_child(_quicksave_toast)
 
 	# 分支选项居中面板
 	_choices_panel = PanelContainer.new()
@@ -323,8 +385,16 @@ func _bind_textures_and_renderers() -> void:
 		var m_assets := _theme_loader.get_meswin_assets()
 		if m_assets.get("box", null) != null:
 			_meswin_plate.texture = m_assets["box"] as Texture2D
-		if m_assets.get("accent", null) != null:
-			_meswin_accent.texture = m_assets["accent"] as Texture2D
+		if m_assets.get("accent_left", null) != null and _accent_left != null:
+			_accent_left.texture = m_assets["accent_left"] as Texture2D
+		if m_assets.get("accent_right", null) != null and _accent_right != null:
+			_accent_right.texture = m_assets["accent_right"] as Texture2D
+		_auto_ring_tex = m_assets.get("auto_ring", null) as Texture2D
+		_skip_ring_tex = m_assets.get("skip_ring", null) as Texture2D
+		if m_assets.get("wait_ring", null) != null and _wait_ring != null:
+			_wait_ring.texture = m_assets["wait_ring"] as Texture2D
+		if m_assets.get("quicksave_gear", null) != null and _quicksave_toast != null:
+			_quicksave_toast.texture = m_assets["quicksave_gear"] as Texture2D
 
 
 func _process(delta: float) -> void:
@@ -333,13 +403,37 @@ func _process(delta: float) -> void:
 		_tips_toast_timer -= delta
 		if _tips_toast_timer <= 0.0:
 			_tips_toast.visible = false
+	if _quicksave_toast != null and _quicksave_toast.visible:
+		_quicksave_timer -= delta
+		if _quicksave_timer <= 0.0:
+			_quicksave_toast.visible = false
+		else:
+			_quicksave_toast.modulate.a = clampf(_quicksave_timer * 1.8, 0.0, 1.0)
 	if _dialogue_view != null and _dialogue_view.visible:
 		var completed := _body_renderer.is_fully_revealed()
 		if not completed:
 			_body_renderer.step_reveal(delta)
-		_wait_cursor.visible = completed and not _choices_panel.visible
-		if _wait_cursor.visible:
-			_wait_cursor.modulate.a = 0.55 + 0.45 * sin(_blink_t * 6.0)
+		var show_wait := completed and not _choices_panel.visible and (_mode_ring == null or not _mode_ring.visible)
+		if _wait_ring != null and _wait_ring.texture != null:
+			_wait_ring.visible = show_wait
+			_wait_cursor.visible = false
+			if show_wait:
+				_wait_ring.rotation = fmod(_blink_t * 2.4, TAU)
+				_wait_ring.modulate.a = 0.72 + 0.28 * sin(_blink_t * 5.0)
+		else:
+			_wait_cursor.visible = show_wait
+			if _wait_cursor.visible:
+				_wait_cursor.modulate.a = 0.55 + 0.45 * sin(_blink_t * 6.0)
+		if _mode_ring != null and _mode_ring.visible:
+			_mode_ring.rotation = fmod(_blink_t * 1.4, TAU)
+
+
+func show_quicksaved_toast() -> void:
+	_ensure_ui()
+	if _quicksave_toast != null and _quicksave_toast.texture != null:
+		_quicksave_toast.visible = true
+		_quicksave_toast.modulate.a = 1.0
+		_quicksave_timer = 1.8
 
 
 func show_tips_toast(tip_id: int) -> void:
@@ -396,15 +490,25 @@ func toggle_hide_ui() -> void:
 	_ui_hidden = not _ui_hidden
 	if not _title_view.visible:
 		_dialogue_view.visible = not _ui_hidden
+	ui_hidden_changed.emit(_ui_hidden)
 
 
 func set_mode_badge(auto_on: bool, skip_on: bool) -> void:
+	if _mode_ring != null:
+		if skip_on and _skip_ring_tex != null:
+			_mode_ring.texture = _skip_ring_tex
+			_mode_ring.visible = true
+		elif auto_on and _auto_ring_tex != null:
+			_mode_ring.texture = _auto_ring_tex
+			_mode_ring.visible = true
+		else:
+			_mode_ring.visible = false
 	if _mode_badge == null:
 		return
 	if skip_on:
-		_mode_badge.text = ">> SKIPPING"
+		_mode_badge.text = ">> SKIPPING" if (_mode_ring == null or not _mode_ring.visible) else ""
 	elif auto_on:
-		_mode_badge.text = "● AUTO"
+		_mode_badge.text = "● AUTO" if (_mode_ring == null or not _mode_ring.visible) else ""
 	else:
 		_mode_badge.text = ""
 
@@ -428,12 +532,30 @@ func show_dialogue_line(buf: PackedByteArray, str_offset: int, instant: bool = f
 	var gids := PackedInt32Array()
 	for ng in name_arr:
 		gids.append(int(ng["gid"]))
-	_name_renderer.set_glyph_list(gids, 0.76, Color(1.0, 0.78, 0.35))
+	_name_renderer.set_glyph_list(gids, 0.72, Color(1.0, 0.80, 0.36))
+	var has_name := not gids.is_empty()
+	if _meswin_accent != null:
+		_meswin_accent.visible = has_name
+	if has_name:
+		var nw := _name_renderer.get_content_size().x
+		_name_renderer.position = Vector2(960.0 - nw * 0.5, 1022.0)
+		if _meswin_accent != null:
+			var wing_w := 158.0
+			var gap := maxf(76.0, nw + 36.0)
+			var total_w := wing_w * 2.0 + gap
+			_meswin_accent.position = Vector2(960.0 - total_w * 0.5, 1024.0)
+			_meswin_accent.size = Vector2(total_w, 32.0)
+			if _accent_left != null:
+				_accent_left.position = Vector2(0.0, 2.0)
+			if _accent_right != null:
+				_accent_right.position = Vector2(total_w - wing_w, 2.0)
 
 
 func clear_dialogue_line() -> void:
 	if _name_renderer != null:
 		_name_renderer.clear_text()
+	if _meswin_accent != null:
+		_meswin_accent.visible = false
 	if _body_renderer != null:
 		_body_renderer.clear_text()
 
@@ -545,15 +667,16 @@ func open_config(initial_tab: int = 0) -> void:
 func _on_dialogue_tap(event: InputEvent) -> void:
 	if has_modal_open():
 		return
+	var emulate_mouse := bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", false))
 	if _ui_hidden:
-		if (event is InputEventMouseButton and event.pressed) or (event is InputEventScreenTouch and event.pressed):
+		if (event is InputEventMouseButton and event.pressed) or (not emulate_mouse and event is InputEventScreenTouch and event.pressed):
 			toggle_hide_ui()
 			return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			advance_dialogue_requested.emit()
-	elif event is InputEventScreenTouch:
+	elif not emulate_mouse and event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		if st.pressed:
 			advance_dialogue_requested.emit()

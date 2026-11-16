@@ -66,10 +66,56 @@ func get_title_assets() -> Dictionary:
 func get_meswin_assets() -> Dictionary:
 	return {
 		"box": get_region("MESWIN.DDS", Rect2i(0, 888, 1920, 318)),
-		"accent": get_region("MESWIN.DDS", Rect2i(0, 818, 340, 36)),
+		"accent": get_region("MESWIN.DDS", Rect2i(5, 820, 326, 28)),
+		"accent_left": get_region("MESWIN.DDS", Rect2i(5, 820, 158, 28)),
+		"accent_right": get_region("MESWIN.DDS", Rect2i(173, 820, 158, 28)),
+		"date_pill_bg": get_region("MESWIN.DDS", Rect2i(1933, 1023, 260, 133)),
+		"auto_btn_off": get_region("MESWIN.DDS", Rect2i(2207, 1052, 119, 54)),
+		"auto_btn_on": get_region("MESWIN.DDS", Rect2i(2200, 1000, 135, 52)),
+		"skip_btn_off": get_region("MESWIN.DDS", Rect2i(2207, 1158, 119, 54)),
+		"skip_btn_on": get_region("MESWIN.DDS", Rect2i(2207, 1106, 119, 52)),
 		"auto_badge": get_region("MESWIN.DDS", Rect2i(2192, 1040, 210, 48)),
 		"skip_badge": get_region("MESWIN.DDS", Rect2i(2192, 1090, 210, 48)),
 		"auto_ring": get_region("MESWIN.DDS", Rect2i(2480, 0, 140, 140)),
+		"skip_ring": get_region("MESWIN.DDS", Rect2i(2482, 700, 140, 140)),
+		"wait_ring": get_region("MESWIN.DDS", Rect2i(2036, 912, 48, 48)),
+		"quicksave_gear": get_region("MESWIN.DDS", Rect2i(1948, 650, 216, 172)),
+	}
+
+
+## 获取 PC 1:1 手机终端 / RINE / 壁纸 / 图标全套切片
+func get_phone_assets() -> Dictionary:
+	var wallpapers: Array[Texture2D] = []
+	var pw_sheet := get_sheet("PWCG.DDS")
+	if pw_sheet != null:
+		for row in range(2):
+			for col in range(6):
+				wallpapers.append(get_region("PWCG.DDS", Rect2i(col * 456, row * 726, 456, 726)))
+	var app_icons: Array[Texture2D] = [
+		get_region("PHONE_B.DDS", Rect2i(2220, 1410, 92, 118)), # 電話
+		get_region("PHONE_B.DDS", Rect2i(2328, 1410, 92, 118)), # RINE
+		get_region("PHONE_B.DDS", Rect2i(2436, 1410, 92, 118)), # Amadeus
+		get_region("PHONE_B.DDS", Rect2i(2544, 1410, 92, 118)), # 設定
+	]
+	var app_icons_active: Array[Texture2D] = [
+		get_region("PHONE_B.DDS", Rect2i(2650, 1410, 95, 118)),
+		get_region("PHONE_B.DDS", Rect2i(2755, 1410, 95, 118)),
+		get_region("PHONE_B.DDS", Rect2i(2860, 1410, 95, 118)),
+		get_region("PHONE_B.DDS", Rect2i(2965, 1410, 95, 118)),
+	]
+	return {
+		"phone_frame": get_region("PHONE.DDS", Rect2i(0, 0, 620, 1080)),
+		"amadeus_logo": get_region("PHONE.DDS", Rect2i(940, 760, 400, 240)),
+		"rine_bg": get_region("PHONE_B.DDS", Rect2i(1473, 0, 456, 768)),
+		"settings_bg": get_region("PHONE_B.DDS", Rect2i(1473, 768, 456, 768)),
+		"ringtone_bg": get_region("PHONE_B.DDS", Rect2i(1929, 768, 456, 768)),
+		"xp_status_bar": get_region("PHONE_B.DDS", Rect2i(0, 1442, 453, 44)),
+		"hw_nav_bar": get_region("PHONE_B.DDS", Rect2i(0, 1389, 453, 48)),
+		"rine_input_bar": get_region("PHONE_B.DDS", Rect2i(2600, 1215, 456, 93)),
+		"nav_bar": get_region("PHONE_B.DDS", Rect2i(0, 1389, 453, 147)),
+		"app_icons": app_icons,
+		"app_icons_active": app_icons_active,
+		"wallpapers": wallpapers,
 	}
 
 

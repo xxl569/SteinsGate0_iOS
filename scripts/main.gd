@@ -34,6 +34,7 @@ var _cli_label: int = 0
 var _cli_advance_clicks: int = 0
 var _cli_skip_movies: bool = false
 var _cli_open_phone: bool = false
+var _cli_phone_tab: String = ""
 var _cli_open_panel: String = ""
 var _cli_screenshot_path: String = ""
 var _screenshot_frames_left: int = -1
@@ -64,6 +65,8 @@ func _parse_cli_args() -> void:
 			_cli_skip_movies = true
 		elif arg == "--open-phone":
 			_cli_open_phone = true
+		elif arg.begins_with("--phone-tab="):
+			_cli_phone_tab = arg.substr(12).to_lower()
 		elif arg.begins_with("--open-panel="):
 			_cli_open_panel = arg.substr(13)
 		elif arg.begins_with("--screenshot="):
@@ -145,6 +148,14 @@ func _connect_signals() -> void:
 	panels.retry_byoa_requested.connect(_mount_and_boot)
 	panels.config_applied.connect(_on_config_applied)
 	panels.modal_visibility_changed.connect(func(_open: bool): _sync_modal_block())
+	panels.ui_hidden_changed.connect(func(hidden: bool):
+		if gesture_helper != null:
+			gesture_helper.set_ui_hidden(hidden)
+	)
+	phone_drawer.panel_toggled.connect(func(opened: bool):
+		if gesture_helper != null:
+			gesture_helper.set_phone_open(opened)
+	)
 
 	tips_panel.closed.connect(_sync_modal_block)
 	gallery.closed.connect(_sync_modal_block)
@@ -207,6 +218,7 @@ func _mount_and_boot() -> void:
 		return
 
 	panels.hide_byoa_wizard()
+	vm.load_read_lines()
 	theme_loader.bind_vfs(vfs)
 	stage.bind_vfs(vfs)
 	stage.bind_vm(vm)
@@ -217,7 +229,8 @@ func _mount_and_boot() -> void:
 	video.bind_vm(vm)
 	video.apply_config(config)
 	panels.setup(vfs, vm, config, theme_loader)
-	phone_drawer.setup(vfs, vm, theme_loader)
+	phone_drawer.setup(vfs, vm, theme_loader, audio, config)
+	gesture_helper.bind_theme(theme_loader)
 	gallery.setup(vfs, audio, video, stage.get_cache(), theme_loader)
 	tips_panel.setup(vfs, vm, theme_loader)
 
@@ -244,8 +257,22 @@ func _mount_and_boot() -> void:
 						break
 				elif vm.is_waiting_for_choice():
 					break
+			if stage != null:
+				stage.flush_transitions()
 			if _cli_open_phone:
 				phone_drawer.open_phone()
+				match _cli_phone_tab:
+					"contacts":
+						phone_drawer.switch_screen(UiPhoneRine.PhoneScreen.CONTACTS, false)
+					"chat", "rine":
+						phone_drawer.switch_screen(UiPhoneRine.PhoneScreen.CHAT, false)
+					"settings":
+						phone_drawer.switch_screen(UiPhoneRine.PhoneScreen.SETTINGS, false)
+					"wallpaper":
+						phone_drawer.switch_screen(UiPhoneRine.PhoneScreen.WALLPAPER, false)
+					"ringtone":
+						phone_drawer.switch_screen(UiPhoneRine.PhoneScreen.RINGTONE, false)
+			gesture_helper.update_date_display(vm)
 	else:
 		return_to_title()
 
@@ -310,6 +337,8 @@ func start_new_game() -> void:
 
 
 func return_to_title() -> void:
+	if vm != null:
+		vm.save_read_lines()
 	_running_story = false
 	_auto_mode = false
 	_skip_mode = false
@@ -385,6 +414,8 @@ func _process(delta: float) -> void:
 			if _skip_timer >= 0.04:
 				_skip_timer = 0.0
 				panels.reveal_dialogue_instant()
+				if stage != null:
+					stage.flush_transitions()
 				vm.notify_user_advance()
 
 	# 自动播放模式逻辑
@@ -408,6 +439,9 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_OS_MEMORY_WARNING:
 		if stage != null:
 			stage.on_low_memory()
+	elif what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED:
+		if vm != null:
+			vm.save_read_lines()
 
 
 func _on_user_advance() -> void:
@@ -440,6 +474,8 @@ func _toggle_skip_mode() -> void:
 
 
 func _update_mode_indicators() -> void:
+	if vm != null:
+		vm.skip_active = _skip_mode
 	if panels != null:
 		panels.set_mode_badge(_auto_mode, _skip_mode)
 	if gesture_helper != null:
@@ -449,6 +485,10 @@ func _update_mode_indicators() -> void:
 func _on_vm_dialogue(buf: PackedByteArray, soff: int, _cid: int, _vid: int, _sid: int, is_read: bool) -> void:
 	_line_read_flag = is_read
 	_auto_timer = 0.0
+	if gesture_helper != null:
+		gesture_helper.update_date_display(vm)
+	if vm != null and vm.backlog.size() % 20 == 0:
+		vm.save_read_lines()
 	panels.show_dialogue_line(buf, soff, _skip_mode)
 
 
@@ -467,6 +507,8 @@ func _on_vm_choices_requested(choices: Array) -> void:
 	_update_mode_indicators()
 	if config != null and (config.auto_quicksave_mode == 1 or config.auto_quicksave_mode == 2):
 		UiPanels.write_slot_data(99, vm.export_state(), "自动分支点存档", int(_play_time_sec))
+		if panels != null:
+			panels.show_quicksaved_toast()
 	panels.show_choices(choices)
 
 
@@ -480,6 +522,8 @@ func _on_vm_script_switched(_sname: String) -> void:
 	# 按设置决定是否自动快速存档留存最近切换脚本进度 (0=场景, 2=双方)
 	if config == null or config.auto_quicksave_mode == 0 or config.auto_quicksave_mode == 2:
 		UiPanels.write_slot_data(99, vm.export_state(), "自动章节切换", int(_play_time_sec))
+		if panels != null:
+			panels.show_quicksaved_toast()
 
 
 func _capture_pending_thumb() -> void:

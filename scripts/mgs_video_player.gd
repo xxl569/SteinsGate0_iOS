@@ -42,7 +42,7 @@ func _ensure_ui() -> void:
 	_player.name = "TheoraPlayer"
 	_player.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_player.expand = true
-	_player.buffering_msec = 1000
+	_player.buffering_msec = 500
 	_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player.finished.connect(_on_video_finished)
 	_backdrop.add_child(_player)

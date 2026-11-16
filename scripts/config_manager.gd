@@ -41,9 +41,13 @@ var show_floating_hud: bool = true
 # 2. TEXT 文字设置
 var text_speed: float = 48.0 # 信息速度 (每秒字数；>= 110 表示瞬间全显)
 var auto_delay: float = 1.6 # 自动模式等待时间 (秒)
-var skip_unread: bool = false # 跳过模式 (false=仅已读, true=全部)
+var skip_unread: bool = true # 跳过模式 (false=仅已读, true=全部；iOS 触控默认开启全部快进以免首次游玩点快进无反应)
 var skip_continue_at_choice: bool = false
 var voice_stop_on_next: bool = false
+
+# 手机 RINE 个性化设置
+var phone_wallpaper_idx: int = 0 # 0..11 (PWCG.DDS 12 张壁纸)
+var phone_ringtone_idx: int = 0 # 0..6 (SGSE700..SGSE706 7 首来电铃声)
 
 # 3. SOUND 声音设置 (0.0 ~ 1.0)
 var voice_volume: float = 1.00 # 声音音量
@@ -90,9 +94,11 @@ func reset_to_defaults() -> void:
 
 	text_speed = 48.0
 	auto_delay = 1.6
-	skip_unread = false
+	skip_unread = true
 	skip_continue_at_choice = false
 	voice_stop_on_next = false
+	phone_wallpaper_idx = 0
+	phone_ringtone_idx = 0
 
 	voice_volume = 1.00
 	bgm_volume = 0.80
@@ -155,6 +161,8 @@ func load_config() -> void:
 				skip_unread = bool(d.get("skip_unread", skip_unread))
 				skip_continue_at_choice = bool(d.get("skip_continue_at_choice", skip_continue_at_choice))
 				voice_stop_on_next = bool(d.get("voice_stop_on_next", voice_stop_on_next))
+				phone_wallpaper_idx = clampi(int(d.get("phone_wallpaper_idx", phone_wallpaper_idx)), 0, 11)
+				phone_ringtone_idx = clampi(int(d.get("phone_ringtone_idx", phone_ringtone_idx)), 0, 6)
 
 				voice_volume = clampf(float(d.get("voice_volume", voice_volume)), 0.0, 1.0)
 				bgm_volume = clampf(float(d.get("bgm_volume", bgm_volume)), 0.0, 1.0)
@@ -193,6 +201,8 @@ func save_config() -> void:
 		"skip_unread": skip_unread,
 		"skip_continue_at_choice": skip_continue_at_choice,
 		"voice_stop_on_next": voice_stop_on_next,
+		"phone_wallpaper_idx": phone_wallpaper_idx,
+		"phone_ringtone_idx": phone_ringtone_idx,
 		"voice_volume": voice_volume,
 		"bgm_volume": bgm_volume,
 		"se_volume": se_volume,

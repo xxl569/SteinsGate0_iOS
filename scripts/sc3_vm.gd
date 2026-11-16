@@ -7,11 +7,14 @@ signal dialogue_shown(script_bytes: PackedByteArray, str_offset: int, char_id: i
 signal dialogue_clear()
 signal mes_window_changed(visible: bool)
 signal bg_changed(layer: int, bg_idx: int)
+signal bg_color_changed(layer: int, color: Color)
 signal bg_cleared(layer: int)
+signal bg_committed(dst_mask: int, src_mask: int)
 signal pic_loaded(surf_id: int, archive_type: int, file_id: int)
 signal disp_changed(surf_id: int, visible: bool)
 signal chara_loaded(slot: int, chara_idx: int, group_hint: int)
 signal chara_released(slot: int)
+signal chara_swapped(dst_mask: int, src_mask: int)
 signal bgm_play_requested(bgm_idx: int, loop: bool, fade_frames: int)
 signal bgm_stop_requested(fade_frames: int)
 signal se_play_requested(se_idx: int, loop: bool)
@@ -91,10 +94,30 @@ var _mes_reveal_done: bool = true
 var _mes_click_pending: bool = false
 var _movie_playing: bool = false
 var _auto_click_all_waits: bool = false # 仅测试模式可选
+var skip_active: bool = false # 快进开关（供 0x0046 与协程等待加速读取）
+
+const READ_LINES_PATH := "user://read_lines.json"
 
 
 func _init(vfs: MgsVfs = null) -> void:
 	_vfs = vfs
+	load_read_lines()
+
+
+func load_read_lines() -> void:
+	if not FileAccess.file_exists(READ_LINES_PATH):
+		return
+	var txt := FileAccess.get_file_as_string(READ_LINES_PATH)
+	var parsed: Variant = JSON.parse_string(txt)
+	if parsed is Dictionary:
+		read_lines = (parsed as Dictionary).duplicate()
+
+
+func save_read_lines() -> void:
+	var f := FileAccess.open(READ_LINES_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(read_lines))
+		f.close()
 
 
 func bind_vfs(vfs: MgsVfs) -> void:
@@ -129,6 +152,8 @@ func load_script_into_slot(slot_id: int, name_or_idx: Variant) -> bool:
 		entry_name = _vfs.get_entry_name_by_index("script.mpk", entry_idx)
 	else:
 		entry_name = _vfs.find_script_entry_name(str(name_or_idx))
+		if entry_name != "":
+			entry_idx = _vfs.get_archive_entry_index("script.mpk", entry_name)
 	if entry_name == "":
 		return false
 
@@ -147,6 +172,10 @@ func load_script_into_slot(slot_id: int, name_or_idx: Variant) -> bool:
 		"code_start": hdr["code_start"],
 		"code_end": hdr["code_end"],
 	}
+	# 同步当前主线脚本 MPK 索引至 ScrWork[4343]，驱动 macrosys2 自动更新章节日期与 RINE 状态
+	if entry_idx >= 16 and entry_idx <= 119:
+		if slot_id == 3 or (slot_id == 0 and entry_name.to_upper().begins_with("SG0_")):
+			set_scr_work(4343, entry_idx)
 	return true
 
 
@@ -257,6 +286,25 @@ func set_flag(idx: int, val: int) -> void:
 		flags[idx] = true
 
 
+static func _mask_to_index(mask: int) -> int:
+	## 对应 Game.exe 0x4238c0：将图层/槽位位掩码 (1,2,4,8,16...) 转换为 0..7 索引
+	if mask <= 0:
+		return 0
+	for b in range(8):
+		if (mask & (1 << b)) != 0:
+			return b
+	return clampi(mask, 0, 7)
+
+
+func _swap_scr_work_range(base_a: int, base_b: int, count: int) -> void:
+	## 双向交换两段连续 ScrWork 区间（用于 10:02 BGCommit 与 10:06 ChaSwap）
+	for i in range(count):
+		var va := get_scr_work(base_a + i)
+		var vb := get_scr_work(base_b + i)
+		set_scr_work(base_a + i, vb)
+		set_scr_work(base_b + i, va)
+
+
 func get_thread_var(thread: Object, idx: int) -> int:
 	return (thread as ThreadCtx).get_var(idx)
 
@@ -363,14 +411,15 @@ func get_current_script_name() -> String:
 # ==================== 帧步进主循环 ====================
 
 func step_frame(frames: int = 1) -> void:
-	# 1. 新一帧解除 YIELD_FRAME 并将 FRAMES 倒计时递减
+	# 1. 新一帧解除 YIELD_FRAME 并将 FRAMES 倒计时递减（快进态加速过渡帧等待）
+	var step_mult := 4 if skip_active else 1
 	for th in _threads:
 		if not th.alive:
 			continue
 		if th.wait_mode == WaitMode.YIELD_FRAME:
 			th.wait_mode = WaitMode.NONE
 		elif th.wait_mode == WaitMode.FRAMES:
-			th.wait_frames -= maxi(1, frames)
+			th.wait_frames -= maxi(1, frames) * step_mult
 			if th.wait_frames <= 0:
 				th.wait_frames = 0
 				th.wait_mode = WaitMode.NONE
@@ -575,11 +624,15 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				_jump_label(th, lid)
 			else:
 				th.pc = p
-		0x11: # SetFlagVal(val_u8, flag_expr)
-			var val := _rd_u8(data, p); p += 1
+		0x11: # WaitFlag(cond_u8, flag_expr) (Game.exe 0x45e490: 不可修改标志位)
+			var cond := _rd_u8(data, p); p += 1
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
-			set_flag(int(e1["value"]), val)
-			th.pc = p
+			var fid := int(e1["value"])
+			# 若等待过场视频标志 0x73B/0x73C 为 1，让出本帧等待视频结束
+			if (fid == 0x73B or fid == 0x73C) and get_flag(fid) == (1 if cond != 0 else 0) and _movie_playing:
+				th.wait_mode = WaitMode.YIELD_FRAME
+			else:
+				th.pc = p
 		0x12: # SetFlag(flag_expr) -> 设为 1
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			set_flag(int(e1["value"]), 1)
@@ -636,6 +689,9 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			if b1 == 0x26:
 				th.wait_mode = WaitMode.FRAMES
 				th.wait_frames = maxi(1, int(e1["value"]))
+			elif b1 == 0x46:
+				# 动画/过渡循环内检测快进按键状态 -> 写入 ThreadVar[7]
+				th.set_var(7, 1 if skip_active else 0)
 		0x20: # WaitThreadGroup
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			var _u16 := _rd_u16(data, p); p += 2
@@ -843,7 +899,7 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			for _k in range(5):
 				p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x05: # DispCtrl
+		0x05: # DispCtrl / 数学插值运算 (sub=3 正弦缓动, sub=5 线性插值)
 			var sub := _rd_u8(data, p); p += 1
 			var argc: int = int({0: 2, 1: 2, 2: 3, 3: 4, 4: 4, 5: 4, 6: 4}.get(sub, 0))
 			var args: Array[int] = []
@@ -851,7 +907,13 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				var ek := Sc3Expr.eval(data, p, self, th); p = int(ek["end_pos"])
 				args.append(int(ek["value"]))
 			th.pc = p
-			if args.size() >= 2:
+			if sub == 3 and args.size() >= 3:
+				var s_val := sin(clampf(float(args[2]) / 16384.0, 0.0, 1.0) * PI * 0.5)
+				set_scr_work(args[0], int(round(s_val * float(args[1]) * 65536.0)))
+			elif sub == 5 and args.size() >= 4:
+				var denom := maxi(1, args[3])
+				set_scr_work(args[0], int(round(float(args[1]) * float(args[2]) / float(denom))))
+			elif sub <= 2 and args.size() >= 2:
 				disp_changed.emit(args[0], args[1] != 0)
 		0x06:
 			var sub := _rd_u8(data, p); p += 1
@@ -1025,39 +1087,124 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 
 func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 	match b1:
-		0x00, 0x10, 0x11, 0x17, 0x28, 0x29, 0x2E:
+		0x00, 0x17, 0x28, 0x29, 0x2E:
 			p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x01: # SG0_BgChaCtrl(layer_expr, bg_idx_expr)
+		0x10: # SG0_BgReleaseMask(mask_expr) -> 按位释放背景图层 (Game.exe 0x460b90)
+			var em := Sc3Expr.eval(data, p, self, th); p = int(em["end_pos"])
+			th.pc = p
+			var mask := int(em["value"])
+			for bit_i in range(8):
+				if (mask & (1 << bit_i)) != 0:
+					set_flag(2400 + bit_i, 0)
+					set_scr_work(4500 + 40 * bit_i + 7, 0xFFFF)
+					bg_cleared.emit(bit_i)
+		0x11: # SG0_ChaReleaseMask(mask_expr) -> 按位淡出释放立绘槽位 (Game.exe 0x460c00)
+			var em := Sc3Expr.eval(data, p, self, th); p = int(em["end_pos"])
+			th.pc = p
+			var mask := int(em["value"])
+			for bit_i in range(8):
+				if (mask & (1 << bit_i)) != 0:
+					set_flag(2410 + bit_i, 0)
+					set_scr_work(5100 + 40 * bit_i + 9, 0xFFFF)
+					chara_released.emit(1 << bit_i)
+		0x01: # SG0_BgChaCtrl(layer_mask_expr, bg_idx_expr) (Game.exe 0x45f930)
 			var el := Sc3Expr.eval(data, p, self, th); p = int(el["end_pos"])
 			var eb := Sc3Expr.eval(data, p, self, th); p = int(eb["end_pos"])
 			th.pc = p
-			var layer := int(el["value"])
+			var layer := _mask_to_index(int(el["value"]))
 			var bg_val := int(eb["value"])
-			if bg_val < 0 or bg_val >= 0x00FF0000:
-				bg_cleared.emit(layer)
-			else:
+			set_flag(2400 + layer, 1)
+			set_scr_work(4500 + 40 * layer + 7, bg_val)
+			if bg_val >= 0 and bg_val < 0x00FF0000:
 				bg_changed.emit(layer, bg_val)
-		0x02, 0x03, 0x06, 0x07, 0x08, 0x09, 0x0E, 0x16:
+			else:
+				# 0xFFRRGGBB (-1=白, -16777216=黑, -65536=红) 为纯色全屏层而非清屏透明
+				var u32 := bg_val & 0xFFFFFFFF
+				var ca := float((u32 >> 24) & 0xFF) / 255.0
+				var cr := float((u32 >> 16) & 0xFF) / 255.0
+				var cg := float((u32 >> 8) & 0xFF) / 255.0
+				var cb := float(u32 & 0xFF) / 255.0
+				if ca <= 0.0:
+					ca = 1.0
+				bg_color_changed.emit(layer, Color(cr, cg, cb, ca))
+		0x02: # SG0_BgCommit(dst_mask, src_mask) (Game.exe 0x460220: 双向交换图层与 ScrWork[4500+40*i])
+			var ed := Sc3Expr.eval(data, p, self, th); p = int(ed["end_pos"])
+			var es := Sc3Expr.eval(data, p, self, th); p = int(es["end_pos"])
+			th.pc = p
+			var dst_m := int(ed["value"])
+			var src_m := int(es["value"])
+			var d_idx := _mask_to_index(dst_m)
+			var s_idx := _mask_to_index(src_m)
+			if d_idx >= 0 and s_idx >= 0 and d_idx != s_idx:
+				var fd := get_flag(2400 + d_idx)
+				var fs := get_flag(2400 + s_idx)
+				set_flag(2400 + d_idx, fs)
+				set_flag(2400 + s_idx, fd)
+				_swap_scr_work_range(4500 + 40 * d_idx, 4500 + 40 * s_idx, 40)
+				_swap_scr_work_range(3400 + d_idx, 3400 + s_idx, 1)
+			bg_committed.emit(dst_m, src_m)
+		0x06: # SG0_ChaSwap(dst_mask, src_mask) (Game.exe 0x460760: 双向交换槽位与 ScrWork[5100+40*i])
+			var ed := Sc3Expr.eval(data, p, self, th); p = int(ed["end_pos"])
+			var es := Sc3Expr.eval(data, p, self, th); p = int(es["end_pos"])
+			th.pc = p
+			var dst_m := int(ed["value"])
+			var src_m := int(es["value"])
+			var d_idx := _mask_to_index(dst_m)
+			var s_idx := _mask_to_index(src_m)
+			if d_idx >= 0 and s_idx >= 0 and d_idx != s_idx:
+				var fd := get_flag(2410 + d_idx)
+				var fs := get_flag(2410 + s_idx)
+				set_flag(2410 + d_idx, fs)
+				set_flag(2410 + s_idx, fd)
+				_swap_scr_work_range(5100 + 40 * d_idx, 5100 + 40 * s_idx, 40)
+				_swap_scr_work_range(3450 + d_idx, 3450 + s_idx, 1)
+			chara_swapped.emit(dst_m, src_m)
+		0x03: # SG0_BgColorFill(layer_mask, rgb) (Game.exe 0x460320)
+			var el := Sc3Expr.eval(data, p, self, th); p = int(el["end_pos"])
+			var ec := Sc3Expr.eval(data, p, self, th); p = int(ec["end_pos"])
+			th.pc = p
+			var layer := _mask_to_index(int(el["value"]))
+			var rgb := int(ec["value"]) & 0xFFFFFF
+			set_flag(2400 + layer, 1)
+			set_scr_work(4500 + 40 * layer + 7, int(0xFF000000 | rgb))
+			var cr := float((rgb >> 16) & 0xFF) / 255.0
+			var cg := float((rgb >> 8) & 0xFF) / 255.0
+			var cb := float(rgb & 0xFF) / 255.0
+			bg_color_changed.emit(layer, Color(cr, cg, cb, 1.0))
+		0x07, 0x08, 0x09, 0x0E, 0x16:
 			p = Sc3Expr.skip(data, p)
 			p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x04: # SG0_SpriteAnim
+		0x04: # SG0_SpriteAnim (Game.exe 0x4603c0)
 			var sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
+			var v3 := 0
 			if sub >= 4:
-				p = Sc3Expr.skip(data, p)
-			p = Sc3Expr.skip(data, p)
+				var e3 := Sc3Expr.eval(data, p, self, th); p = int(e3["end_pos"])
+				v3 = int(e3["value"])
+				sub -= 4
+			var e4 := Sc3Expr.eval(data, p, self, th); p = int(e4["end_pos"])
 			th.pc = p
-		0x05: # SG0_ChaLoad(subop, slot_expr, encoded_idx_expr)
+			var packed := ((((v3 & 0xFF) << 8) | (int(e4["value"]) & 0xFF)) << 8) | (int(e1["value"]) & 0xFF)
+			packed = (packed << 8) | (int(e2["value"]) & 0xFF)
+			set_scr_work(4490 + sub, packed)
+		0x05: # SG0_ChaLoad(subop, slot_mask_expr, encoded_idx_expr) (Game.exe 0x460450)
 			var _sub := _rd_u8(data, p); p += 1
 			var e_slot := Sc3Expr.eval(data, p, self, th); p = int(e_slot["end_pos"])
 			var e_val := Sc3Expr.eval(data, p, self, th); p = int(e_val["end_pos"])
 			th.pc = p
+			var slot_mask := int(e_slot["value"])
+			var slot_idx := _mask_to_index(slot_mask)
 			var raw_v := int(e_val["value"])
 			var chara_idx := raw_v & 0xFFFF
 			var grp_hint := (raw_v >> 16) & 0xFFFF
-			chara_loaded.emit(int(e_slot["value"]), chara_idx, grp_hint)
+			set_flag(2410 + slot_idx, 1)
+			set_scr_work(5100 + 40 * slot_idx + 9, chara_idx)
+			if grp_hint != 0:
+				set_scr_work(5100 + 40 * slot_idx + 12, grp_hint)
+			chara_loaded.emit(slot_mask, chara_idx, grp_hint)
 		0x24:
 			var sub := _rd_u8(data, p); p += 1
 			if sub == 0:

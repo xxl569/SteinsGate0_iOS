@@ -222,6 +222,22 @@ func get_archive_entry_count(archive: String) -> int:
 	return (_archive_index_cache[key] as PackedStringArray).size()
 
 
+func get_archive_entry_index(archive: String, entry_name: String) -> int:
+	if not is_mounted or native == null or entry_name == "":
+		return -1
+	var key := archive.to_lower()
+	if not key.ends_with(".mpk"):
+		key += ".mpk"
+	if not _archive_index_cache.has(key):
+		_archive_index_cache[key] = native.list_entries(key, "")
+	var arr: PackedStringArray = _archive_index_cache[key]
+	var target := entry_name.to_lower()
+	for i in range(arr.size()):
+		if str(arr[i]).to_lower() == target:
+			return i
+	return -1
+
+
 func get_movie_path_by_index(idx: int) -> String:
 	if active_movie_dir == "" or idx < 0:
 		return ""
