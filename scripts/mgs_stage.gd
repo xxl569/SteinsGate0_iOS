@@ -180,28 +180,13 @@ func _process(delta: float) -> void:
 				_screen_fade_rect.visible = false
 				_screen_fade_rect.color.a = 0.0
 
-	# 2. 同步 BG 平移/震动偏移 (ScrWork[4500+40*i + 0/1] + ScrWork[2400+10*i + 0/1]) 与前景可见性
+	# 2. 同步 BG 平移/缩放/脚本淡入与遮罩进度 (ScrWork[4500+40*i + 0..15])
 	if _vm != null:
 		for lid in _bg_layers.keys():
 			var info: Dictionary = _bg_layers[lid]
-			var layer_i := clampi(int(lid), 0, 7)
-			var sp := info.get("sprite", null) as Sprite2D
-			if not is_instance_valid(sp):
-				continue
-			# 依据 Game.exe 0x4295d5：仅当 ScrWork[4500+40*i+8] != 14（且非隐藏暂存）时显示
-			var w8 := _vm.get_scr_work(4500 + 40 * layer_i + 8)
-			var should_vis := (layer_i == 0) or (w8 != 14 and _vm.get_flag(2400 + layer_i) != 0)
-			if sp.visible != should_vis:
-				sp.visible = should_vis
-			if not sp.visible or bool(info.get("is_color", false)) or bool(info.get("pan_manual", false)):
-				continue
-			var pan_x := float(_vm.get_scr_work(4500 + 40 * layer_i + 0) + _vm.get_scr_work(2400 + 10 * layer_i + 0))
-			var pan_y := float(_vm.get_scr_work(4500 + 40 * layer_i + 1) + _vm.get_scr_work(2400 + 10 * layer_i + 1))
-			var base_pos := Vector2(STAGE_WIDTH * 0.5, STAGE_HEIGHT * 0.5) - Vector2(pan_x * 1.5, pan_y * 1.5)
-			if sp.position.distance_to(base_pos) > 0.25:
-				sp.position = sp.position.lerp(base_pos, clampf(delta * 18.0, 0.0, 1.0))
+			_apply_bg_sync(clampi(int(lid), 0, 7), info, false, delta)
 
-		# 3. 实时同步立绘目标位置与缩放 (ScrWork[5100+40*i] + ScrWork[2500+10*i])
+		# 3. 实时同步立绘目标位置、缩放与环境色调 (ScrWork[5100+40*i] + ScrWork[2500+10*i])
 		for slot_id in _chara_slots.keys():
 			var cinfo: Dictionary = _chara_slots[slot_id]
 			var csp := cinfo.get("sprite", null) as Sprite2D
@@ -209,7 +194,24 @@ func _process(delta: float) -> void:
 				continue
 			var sid := int(slot_id)
 			var sidx := _slot_to_scr_idx(sid)
+			var tint_raw := _vm.get_scr_work(5100 + 40 * sidx + 8)
+			csp.modulate = _decode_scr_color(tint_raw, csp.modulate.a)
+			if sid >= 16 or not csp.visible:
+				continue
+			var ch_idx := _vm.get_scr_work(5100 + 40 * sidx + 9)
+			if ch_idx < 0 or ch_idx == 65535:
+				continue
+			var sx := _vm.get_scr_work(5100 + 40 * sidx + 0) + _vm.get_scr_work(2500 + 10 * sidx + 0)
+			var sy := _vm.get_scr_work(5100 + 40 * sidx + 1) + _vm.get_scr_work(2500 + 10 * sidx + 1)
 			var target_pos := _calc_chara_anchor(sidx)
+			# 防止 macrosys 在释放槽位前 1~2 帧先把 ScrWork[5100] 重置为 (640,360) 导致立绘淡出前向中间瞬移
+			if sx == 640 and sy == 360 and csp.position.distance_to(target_pos) > 4.0:
+				var rf := int(cinfo.get("center_reset_frames", 0)) + 1
+				cinfo["center_reset_frames"] = rf
+				if rf < 3:
+					continue
+			else:
+				cinfo["center_reset_frames"] = 0
 			cinfo["base_y"] = target_pos.y
 			if csp.position.distance_to(target_pos) > 0.25:
 				csp.position = csp.position.lerp(target_pos, clampf(delta * 16.0, 0.0, 1.0))
@@ -238,6 +240,8 @@ func flush_transitions() -> void:
 		var sp := info.get("sprite", null) as Sprite2D
 		if is_instance_valid(sp):
 			sp.modulate.a = 1.0
+		if _vm != null:
+			_apply_bg_sync(clampi(int(lid), 0, 7), info, true, 1.0)
 	for sid in _chara_slots.keys():
 		var cinfo: Dictionary = _chara_slots[sid]
 		var tw: Variant = cinfo.get("fade_tween", null)
@@ -245,11 +249,109 @@ func flush_transitions() -> void:
 			(tw as Tween).kill()
 		var csp := cinfo.get("sprite", null) as Sprite2D
 		if is_instance_valid(csp):
-			csp.modulate.a = 1.0
 			var sidx := _slot_to_scr_idx(int(sid))
-			var target_pos := _calc_chara_anchor(sidx)
-			csp.position = target_pos
-			cinfo["base_y"] = target_pos.y
+			var tint_raw := _vm.get_scr_work(5100 + 40 * sidx + 8) if _vm != null else 16777215
+			csp.modulate = _decode_scr_color(tint_raw, 1.0)
+			if _vm == null or (_vm.get_scr_work(5100 + 40 * sidx + 9) != 65535 and _vm.get_scr_work(5100 + 40 * sidx + 9) >= 0):
+				var target_pos := _calc_chara_anchor(sidx)
+				csp.position = target_pos
+				cinfo["base_y"] = target_pos.y
+
+
+func _decode_scr_color(raw: int, alpha: float) -> Color:
+	if raw <= 0 or raw == 16777215:
+		return Color(1.0, 1.0, 1.0, alpha)
+	var r := float((raw >> 16) & 0xFF) / 255.0
+	var g := float((raw >> 8) & 0xFF) / 255.0
+	var b := float(raw & 0xFF) / 255.0
+	return Color(r, g, b, alpha)
+
+
+func _apply_bg_sync(layer_i: int, info: Dictionary, instant: bool, delta: float) -> void:
+	var sp := info.get("sprite", null) as Sprite2D
+	if not is_instance_valid(sp):
+		return
+	var w8 := _vm.get_scr_work(4500 + 40 * layer_i + 8)
+	var prog := _vm.get_scr_work(4500 + 40 * layer_i + 10)
+	var mode := _vm.get_scr_work(4500 + 40 * layer_i + 11)
+	var mask_id := _vm.get_scr_work(4500 + 40 * layer_i + 15)
+
+	var should_vis := false
+	if mode == 1 or mode == 16:
+		info["script_fading"] = true
+		if prog >= 256:
+			info["script_fade_done"] = true
+		should_vis = (layer_i == 0) or (prog > 0)
+		var t := clampf(float(prog) / 256.0, 0.0, 1.0)
+		if mode == 16 and _vfs != null and _vfs.is_mounted:
+			var mcount := _vfs.get_archive_entry_count("mask.mpk")
+			if mcount > 0:
+				var cur_mid := int(info.get("mask_id", -1))
+				if not (sp.material is ShaderMaterial) or cur_mid != mask_id:
+					var mname := _vfs.get_entry_name_by_index("mask.mpk", absi(mask_id) % mcount)
+					var mtex := _load_cached_texture("mask:%s" % mname, "mask.mpk", mname) if mname != "" else null
+					if mtex != null:
+						var mat := ShaderMaterial.new()
+						mat.shader = MASK_WIPE_SHADER
+						mat.set_shader_parameter("mask_tex", mtex)
+						mat.set_shader_parameter("softness", 0.08)
+						sp.material = mat
+						info["mask_id"] = mask_id
+			if sp.material is ShaderMaterial:
+				(sp.material as ShaderMaterial).set_shader_parameter("progress", 1.0 - t)
+				sp.modulate.a = 1.0
+			else:
+				sp.modulate.a = t
+		else:
+			if sp.material != null:
+				sp.material = null
+			sp.modulate.a = t
+	else:
+		if sp.material != null:
+			sp.material = null
+		if layer_i == 0:
+			should_vis = true
+		elif bool(info.get("script_fade_done", false)):
+			should_vis = true
+		else:
+			should_vis = (w8 != 14 and _vm.get_flag(2400 + layer_i) != 0)
+		if bool(info.get("script_fading", false)):
+			info["script_fading"] = false
+			sp.modulate.a = 1.0
+		else:
+			var tw: Variant = info.get("fade_tween", null)
+			if not (tw is Tween and (tw as Tween).is_valid()):
+				sp.modulate.a = 1.0
+
+	if sp.visible != should_vis:
+		sp.visible = should_vis
+	if not sp.visible or bool(info.get("is_color", false)) or bool(info.get("pan_manual", false)):
+		return
+
+	var pan_x := float(_vm.get_scr_work(4500 + 40 * layer_i + 0) + _vm.get_scr_work(2400 + 10 * layer_i + 0))
+	var pan_y := float(_vm.get_scr_work(4500 + 40 * layer_i + 1) + _vm.get_scr_work(2400 + 10 * layer_i + 1))
+	var draw_mode := _vm.get_scr_work(4500 + 40 * layer_i + 9)
+	var zoom_raw := _vm.get_scr_work(4500 + 40 * layer_i + 4)
+	var tex_size := Vector2(sp.texture.get_size()) if sp.texture != null else Vector2(STAGE_WIDTH, STAGE_HEIGHT)
+
+	var target_scale := Vector2.ONE
+	var target_pos := Vector2(STAGE_WIDTH * 0.5, STAGE_HEIGHT * 0.5) - Vector2(pan_x * 1.5, pan_y * 1.5)
+	if draw_mode == 2 and zoom_raw > 0:
+		var z := clampf(float(zoom_raw) / 1000.0, 0.1, 8.0)
+		target_scale = Vector2(z, z)
+		target_pos = Vector2(STAGE_WIDTH * 0.5, STAGE_HEIGHT * 0.5) - (Vector2(pan_x * 1.5, pan_y * 1.5) - tex_size * 0.5) * z
+	elif tex_size.x > STAGE_WIDTH:
+		var fit_s := maxf(STAGE_WIDTH / tex_size.x, 1.0)
+		target_scale = Vector2(fit_s, fit_s)
+
+	if instant or (draw_mode == 2 and zoom_raw > 0):
+		sp.scale = target_scale
+		sp.position = target_pos
+	else:
+		if sp.scale.distance_to(target_scale) > 0.002:
+			sp.scale = sp.scale.lerp(target_scale, clampf(delta * 18.0, 0.0, 1.0))
+		if sp.position.distance_to(target_pos) > 0.25:
+			sp.position = sp.position.lerp(target_pos, clampf(delta * 18.0, 0.0, 1.0))
 
 
 func _get_fade_duration_sec(default_sec: float = 0.28) -> float:
@@ -261,8 +363,6 @@ func _get_fade_duration_sec(default_sec: float = 0.28) -> float:
 		var f := _vm.get_scr_work(1022)
 		if f > 0:
 			return clampf(float(f) / 60.0, 0.14, 1.6)
-		if f == 0:
-			return 0.0
 	return default_sec
 
 
@@ -340,6 +440,7 @@ func load_bg_by_index(layer: int, bg_idx: int) -> bool:
 		_bg_root.add_child(sp)
 
 	sp.texture = tex
+	sp.material = null
 	sp.modulate = Color.WHITE
 	var is_staging_bg := (_vm != null and layer >= 1 and _vm.get_scr_work(4500 + 40 * layer + 8) == 14)
 	sp.visible = not is_staging_bg
@@ -349,16 +450,14 @@ func load_bg_by_index(layer: int, bg_idx: int) -> bool:
 	# 对超大分辨率 CG（例如 1920x3227 或 3840x4050），允许后续通过平移控制观察区间
 	var tw := float(tex.get_width())
 	var th := float(tex.get_height())
-	if tw > STAGE_WIDTH or th > STAGE_HEIGHT:
-		if tw > STAGE_WIDTH:
-			var fit_s := maxf(STAGE_WIDTH / tw, 1.0)
-			sp.scale = Vector2(fit_s, fit_s)
-		if th > STAGE_HEIGHT:
-			sp.position.y = STAGE_HEIGHT * 0.5
+	if tw > STAGE_WIDTH:
+		var fit_s := maxf(STAGE_WIDTH / tw, 1.0)
+		sp.scale = Vector2(fit_s, fit_s)
 
 	var fade_tw: Tween = null
+	var script_mode := _vm.get_scr_work(4500 + 40 * layer + 11) if _vm != null else 0
 	var dur := _get_fade_duration_sec(0.32)
-	if sp.visible and dur > 0.01 and (had_prev or _bg_layers.size() > 0):
+	if layer == 0 and script_mode == 0 and sp.visible and dur > 0.01 and (had_prev or _bg_layers.size() > 0):
 		sp.modulate.a = 0.0
 		fade_tw = create_tween()
 		fade_tw.set_ease(Tween.EASE_OUT)
@@ -373,7 +472,12 @@ func load_bg_by_index(layer: int, bg_idx: int) -> bool:
 		"is_color": false,
 		"pan_manual": false,
 		"fade_tween": fade_tw,
+		"script_fading": false,
+		"script_fade_done": false,
+		"mask_id": -1,
 	}
+	if _vm != null:
+		_apply_bg_sync(layer, _bg_layers[layer], true, 1.0)
 	stage_updated.emit()
 	return true
 
@@ -449,19 +553,29 @@ func commit_bg_layer(dst_mask: int, src_mask: int) -> void:
 
 	if has_src:
 		var src_sp := src_info.get("sprite", null) as Sprite2D
+		src_info["script_fade_done"] = false
+		src_info["script_fading"] = false
+		src_info["mask_id"] = -1
 		if is_instance_valid(src_sp):
 			src_sp.z_index = dst_layer
 			src_sp.name = "BgLayer_%d" % dst_layer
+			src_sp.material = null
 			src_sp.visible = (dst_layer == 0) or (_vm == null) or (_vm.get_scr_work(4500 + 40 * dst_layer + 8) != 14)
 			src_sp.modulate.a = 1.0
 		_bg_layers[dst_layer] = src_info
+		if _vm != null:
+			_apply_bg_sync(dst_layer, src_info, true, 1.0)
 
 	if has_dst:
 		var dst_sp := dst_info.get("sprite", null) as Sprite2D
+		dst_info["script_fade_done"] = false
+		dst_info["script_fading"] = false
+		dst_info["mask_id"] = -1
 		if is_instance_valid(dst_sp):
 			dst_sp.z_index = src_layer
 			dst_sp.name = "BgLayer_%d" % src_layer
-			dst_sp.visible = (src_layer == 0) or (_vm == null) or (_vm.get_scr_work(4500 + 40 * src_layer + 8) != 14)
+			dst_sp.material = null
+			dst_sp.visible = false if src_layer >= 1 else true
 		_bg_layers[src_layer] = dst_info
 
 	stage_updated.emit()
@@ -619,7 +733,8 @@ func load_chara(slot: int, chara_idx: int, group_hint: int = 0) -> bool:
 	sp.visible = not is_staging
 	sp.scale = CHARA_DISPLAY_SCALE
 	sp.position = anchor
-	sp.modulate = Color.WHITE
+	var tint_raw := _vm.get_scr_work(5100 + 40 * sidx + 8) if _vm != null else 16777215
+	sp.modulate = _decode_scr_color(tint_raw, 1.0)
 
 	var fade_tw: Tween = null
 	var dur := _get_fade_duration_sec(0.28)
@@ -641,6 +756,7 @@ func load_chara(slot: int, chara_idx: int, group_hint: int = 0) -> bool:
 		"base_y": anchor.y,
 		"alpha": 1.0,
 		"fade_tween": fade_tw,
+		"center_reset_frames": 0,
 	}
 	_relayout_chara_slots()
 	stage_updated.emit()
@@ -684,6 +800,9 @@ func swap_chara_slots(dst_mask: int, src_mask: int) -> void:
 			var anchor := _calc_chara_anchor(d_sidx)
 			src_sp.position = anchor
 			src_info["base_y"] = anchor.y
+			src_info["center_reset_frames"] = 0
+			var tint_raw := _vm.get_scr_work(5100 + 40 * d_sidx + 8) if _vm != null else 16777215
+			src_sp.modulate = _decode_scr_color(tint_raw, 1.0)
 			var dur := _get_fade_duration_sec(0.28)
 			if src_sp.visible and not had_dst and dur > 0.01:
 				var old_stw: Variant = src_info.get("fade_tween", null)
@@ -764,11 +883,16 @@ func _relayout_chara_slots() -> void:
 		var used_scr := false
 		if _vm != null:
 			var sidx := _slot_to_scr_idx(slot_id)
+			var ch_idx := _vm.get_scr_work(5100 + 40 * sidx + 9)
 			var sx := _vm.get_scr_work(5100 + 40 * sidx + 0) + _vm.get_scr_work(2500 + 10 * sidx + 0)
 			var sy := _vm.get_scr_work(5100 + 40 * sidx + 1) + _vm.get_scr_work(2500 + 10 * sidx + 1)
+			if ch_idx < 0 or ch_idx == 65535:
+				continue
 			if sx != 0 or sy != 0:
 				target_pos = Vector2(float(sx) * 1.5, float(sy) * 1.5)
 				used_scr = true
+				if sx == 640 and sy == 360 and sp.position.distance_to(target_pos) > 4.0:
+					continue
 		if not used_scr:
 			if n == 1:
 				target_pos.x = STAGE_WIDTH * 0.5

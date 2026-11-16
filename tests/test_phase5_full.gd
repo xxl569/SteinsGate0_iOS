@@ -136,7 +136,7 @@ func _run() -> void:
 	assert(av_ses.is_empty(), "启动阶段不应再因 0x0018 误触重复 SE 爆音，实际: %s" % [str(av_ses)])
 	assert(vm_av.jump_to_script("SG0_00_01.scx", 0), "AV 校验跳转 SG0_00_01 失败")
 	var dlg_tick := -1
-	for tk in range(1500):
+	for tk in range(2200):
 		vm_av.step_frame(1)
 		if vm_av.is_waiting_for_movie() or vm_av._movie_playing:
 			vm_av.notify_movie_finished()
@@ -185,6 +185,7 @@ func _run() -> void:
 	assert(vm_reg.jump_to_script("MAIN00.scx", 2), "回归验证跳转 MAIN00 失败")
 	var checked_str23 := false
 	var checked_multi := false
+	var checked_bg376_zoom := false
 	var entered_02 := false
 	for _t in range(4500):
 		vm_reg.step_frame(1)
@@ -195,6 +196,10 @@ func _run() -> void:
 			var sc_slot: int = vm_reg._threads[0].script_slot
 			if vm_reg._scripts.has(sc_slot):
 				cur_sc = str(vm_reg._scripts[sc_slot]["name"])
+		if cur_sc == "SG0_00_01.scx" and not checked_bg376_zoom and vm_reg.get_scr_work(4507) == 376 and vm_reg.get_scr_work(4509) == 2:
+			checked_bg376_zoom = true
+			var z376 := vm_reg.get_scr_work(4504)
+			assert(z376 >= 1000 and z376 <= 2000, "CreateThread+WaitFlag 同步后 BG 376 缩放应 <=2000，实际: %d" % z376)
 		if cur_sc == "SG0_00_01.scx" and not checked_multi and vm_reg.backlog.size() >= 10:
 			var vis_xs: Array[float] = []
 			for sid in st_reg._chara_slots.keys():
@@ -218,6 +223,17 @@ func _run() -> void:
 		if vm_reg.is_waiting_for_click():
 			vm_reg.notify_user_advance()
 	assert(entered_02, "回归验证未能进入 SG0_00_02.scx 首句")
+	assert(checked_bg376_zoom, "未能校验 SG0_00_01 开篇天空 BG 376 缩放同步状态")
+	# 校验 MgsStage 脚本驱动 BG 渐入 (mode=1, prog=128 -> alpha≈0.5) 与 draw_mode=2 缩放
+	st_reg.load_bg_by_index(1, 392)
+	vm_reg.set_scr_work(4540 + 11, 1)
+	vm_reg.set_scr_work(4540 + 10, 128)
+	vm_reg.set_scr_work(4540 + 9, 2)
+	vm_reg.set_scr_work(4540 + 4, 2000)
+	st_reg._process(0.016)
+	var sp1 := st_reg._bg_layers[1]["sprite"] as Sprite2D
+	assert(sp1.visible and absf(sp1.modulate.a - 0.5) < 0.02 and sp1.scale == Vector2(2.0, 2.0),
+		"MgsStage 未按 ScrWork[4550/4551/4544/4549] 同步 BG1 淡入与缩放: vis=%s a=%.2f sc=%s" % [str(sp1.visible), sp1.modulate.a, str(sp1.scale)])
 	assert(st_reg._bg_layers.has(0) and is_instance_valid(st_reg._bg_layers[0].get("sprite", null)) and (st_reg._bg_layers[0]["sprite"] as Sprite2D).visible,
 		"进入 SG0_00_02 UPX 场景后 0 号背景层必须可见，防止 10:02+10:10 导致黑屏")
 	assert(st_reg.get_chara_count() == 0, "进入 SG0_00_02 UPX 场景后上一幕立绘必须已全部释放，实际: %d" % st_reg.get_chara_count())

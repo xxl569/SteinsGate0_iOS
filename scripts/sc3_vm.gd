@@ -56,6 +56,7 @@ class ThreadCtx:
 	var vars: PackedInt32Array = PackedInt32Array()
 	var fields: Dictionary = {} # 0x0018 SetThreadField
 	var loop_counts: Dictionary = {} # pc -> remaining
+	var switch_val: int = 0 # 0x001F / 0x0020 Switch-Case 缓存值
 
 	func _init() -> void:
 		vars.resize(THREAD_VAR_COUNT)
@@ -506,6 +507,8 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 		0x00: # End
 			th.alive = false
 		0x01: # CreateThread(group, script_buf_or_expr, label)
+			# 对齐 Game.exe 0x45dc90 -> 0x45aa80：新线程创建后立即同步执行至首次让出或结束，
+			# 确保子线程忙标志在父线程紧随其后的 WaitFlag 检查前已就位
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
 			var lid := _rd_u16(data, p); p += 2
@@ -513,7 +516,12 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var target_slot := int(e2["value"])
 			if not _scripts.has(target_slot):
 				target_slot = th.script_slot
-			_spawn_thread(int(e1["value"]), target_slot, lid)
+			var new_th := _spawn_thread(int(e1["value"]), target_slot, lid)
+			if new_th != null:
+				var init_ran := 0
+				while new_th.alive and new_th.wait_mode == WaitMode.NONE and init_ran < 1000:
+					_exec_one(new_th)
+					init_ran += 1
 		0x02: # KillThread
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			th.pc = p
@@ -538,6 +546,8 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			th.pc = p
 			var wf := maxi(1, int(e1["value"]))
+			if skip_active:
+				wf = 1
 			th.wait_mode = WaitMode.FRAMES
 			th.wait_frames = wf
 		0x06: # Halt
@@ -624,13 +634,17 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				_jump_label(th, lid)
 			else:
 				th.pc = p
-		0x11: # WaitFlag(cond_u8, flag_expr) (Game.exe 0x45e490: 不可修改标志位)
+		0x11: # WaitFlag(cond_u8, flag_expr) (Game.exe 0x45e490: 若 Flag[fid] == cond 则挂起本帧并在原 PC 重试)
 			var cond := _rd_u8(data, p); p += 1
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			var fid := int(e1["value"])
-			# 若等待过场视频标志 0x73B/0x73C 为 1，让出本帧等待视频结束
-			if (fid == 0x73B or fid == 0x73C) and get_flag(fid) == (1 if cond != 0 else 0) and _movie_playing:
-				th.wait_mode = WaitMode.YIELD_FRAME
+			var target_bit := 1 if cond != 0 else 0
+			if get_flag(fid) == target_bit:
+				if (fid == 0x73B or fid == 0x73C) and not _movie_playing:
+					set_flag(fid, 0)
+					th.pc = p
+				else:
+					th.wait_mode = WaitMode.YIELD_FRAME
 			else:
 				th.pc = p
 		0x12: # SetFlag(flag_expr) -> 设为 1
@@ -683,19 +697,26 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				script_switched.emit(_scripts[0]["name"])
 			else:
 				th.alive = false
-		0x1F, 0x26, 0x2C, 0x31, 0x42, 0x46: # 1-expr 指令
+		0x1F: # Switch(expr) (Game.exe 0x45b220)
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			th.switch_val = int(e1["value"])
+			th.pc = p
+		0x26, 0x2C, 0x31, 0x42, 0x46: # 1-expr 指令
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			th.pc = p
 			if b1 == 0x26:
 				th.wait_mode = WaitMode.FRAMES
-				th.wait_frames = maxi(1, int(e1["value"]))
+				th.wait_frames = 1 if skip_active else maxi(1, int(e1["value"]))
 			elif b1 == 0x46:
 				# 动画/过渡循环内检测快进按键状态 -> 写入 ThreadVar[7]
 				th.set_var(7, 1 if skip_active else 0)
-		0x20: # WaitThreadGroup
-			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
-			var _u16 := _rd_u16(data, p); p += 2
-			th.pc = p
+		0x20: # Case(expr, label) (Game.exe 0x45b240)
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			var lid := _rd_u16(data, p); p += 2
+			if int(e1["value"]) == th.switch_val:
+				_jump_label(th, lid)
+			else:
+				th.pc = p
 		0x21: # BGMPlay (Game.exe 0x45b2a0: subop_u8, bgm_expr[, loop_expr])
 			var sub := _rd_u8(data, p); p += 1
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
@@ -758,12 +779,12 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var _e1 := Sc3Expr.eval(data, p, self, th); p = int(_e1["end_pos"])
 			th.pc = p
 			se_stop_requested.emit(ch)
-		0x33: # WaitFramesCounted (Game.exe 0x45c520: 开场动画与转场真实 60fps 帧等待)
+		0x33: # WaitFramesCounted (Game.exe 0x45c520: 开场动画与转场真实 60fps 帧等待；快进模式下立即跳过)
 			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
 			var _e2 := Sc3Expr.eval(data, p, self, th); p = int(_e2["end_pos"])
 			th.pc = p
 			var cnt := int(e1["value"]) & 0x3FF
-			if cnt > 0:
+			if cnt > 0 and not skip_active:
 				th.wait_mode = WaitMode.FRAMES
 				th.wait_frames = cnt
 		0x3D: # 2-expr
@@ -1224,11 +1245,18 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				for _k in range(7):
 					p = Sc3Expr.skip(data, p)
 			th.pc = p
-		0x22: # SG0_PhoneCtrl
+		0x22: # SG0_PhoneCtrl (Game.exe 0x460f60)
 			var sub := _rd_u8(data, p); p += 1
 			var args: Array = []
 			if sub == 10:
 				args.append(_rd_u16(data, p)); p += 2
+				set_flag(0x4B6, 1)
+			elif sub == 255:
+				set_flag(0x4B6, 1)
+			elif sub == 0 or sub == 1 or sub == 5:
+				set_flag(0x505, 1)
+			elif sub == 3:
+				set_flag(0x505, 0)
 			th.pc = p
 			phone_event.emit(sub, args)
 		0x23: # SG0_TipsCtrl
@@ -1286,6 +1314,8 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"]); args.append(e2["value"])
 			th.pc = p
 			rine_event.emit(sub, args)
+		0x0A, 0x0B, 0x12, 0x1E, 0x2D, 0x2F, 0x40, 0x41: # 0-操作数指令 (含 10:0B SG0_ChaSync)
+			th.pc = p
 		0x0C, 0x13, 0x14, 0x15, 0x1A, 0x1B, 0x1C, 0x1D, 0x1F, 0x20, 0x21, 0x34, 0x36:
 			p += 1
 			th.pc = p

@@ -350,9 +350,13 @@ func _refresh_mode_btn_styles() -> void:
 			_apply_hud_btn_style(_btn_skip, is_skip_active)
 
 
-func _apply_texture_mode_btn(btn: Button, tex: Texture2D, active: bool) -> void:
+func _apply_texture_mode_btn(btn: Button, tex: Texture2D, _active: bool) -> void:
 	btn.text = ""
-	btn.custom_minimum_size = Vector2(124 if active and tex.get_width() > 125 else 118, 48)
+	var th := maxf(1.0, float(tex.get_height()))
+	var target_h := 42.0
+	var target_w := roundf(float(tex.get_width()) * (target_h / th))
+	btn.custom_minimum_size = Vector2(target_w, target_h)
+	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var sb := StyleBoxTexture.new()
 	sb.texture = tex
 	btn.add_theme_stylebox_override("normal", sb)
@@ -425,6 +429,6 @@ func _is_over_hud(canvas_pt: Vector2) -> bool:
 		return true
 	if _bottom_right_hud != null and _bottom_right_hud.visible and _bottom_right_hud.get_global_rect().has_point(canvas_pt):
 		return true
-	if is_phone_open and canvas_pt.x >= 1290.0:
+	if is_phone_open and canvas_pt.x >= 1280.0:
 		return true
 	return false

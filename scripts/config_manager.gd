@@ -4,6 +4,7 @@ extends RefCounted
 ## 完整对齐 PC 版 4 大设置分页：BASIC / TEXT / SOUND / VOICE
 
 const CONFIG_PATH := "user://config.json"
+const CONFIG_SCHEMA_VERSION := 2
 
 # 16 名角色语音槽位定义（严格对应 CONFIG.DDS 4x4 角色网格顺序）
 const VOICE_CHAR_COUNT := 16
@@ -158,7 +159,12 @@ func load_config() -> void:
 
 				text_speed = clampf(float(d.get("text_speed", text_speed)), 10.0, 120.0)
 				auto_delay = clampf(float(d.get("auto_delay", auto_delay)), 0.3, 5.0)
-				skip_unread = bool(d.get("skip_unread", skip_unread))
+				var loaded_schema := int(d.get("config_schema_version", 1))
+				if loaded_schema < CONFIG_SCHEMA_VERSION:
+					# 从 v1 旧存档迁移：默认开启未读快进，避免 iOS 首次游玩快进无效
+					skip_unread = true
+				else:
+					skip_unread = bool(d.get("skip_unread", skip_unread))
 				skip_continue_at_choice = bool(d.get("skip_continue_at_choice", skip_continue_at_choice))
 				voice_stop_on_next = bool(d.get("voice_stop_on_next", voice_stop_on_next))
 				phone_wallpaper_idx = clampi(int(d.get("phone_wallpaper_idx", phone_wallpaper_idx)), 0, 11)
@@ -188,6 +194,7 @@ func load_config() -> void:
 
 func save_config() -> void:
 	var data := {
+		"config_schema_version": CONFIG_SCHEMA_VERSION,
 		"skip_stop_on_trigger": skip_stop_on_trigger,
 		"show_tips_popup": show_tips_popup,
 		"auto_quicksave_mode": auto_quicksave_mode,

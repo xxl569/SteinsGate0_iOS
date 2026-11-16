@@ -310,6 +310,39 @@ func _run() -> void:
 		DirAccess.remove_absolute(UiTips.TIPS_STATE_PATH)
 	print("[7/7] UiTips 206 entries, filters, persistence & detail ok")
 
+	# 8. 补充防回归：DDS 精切尺寸、RINE 指令解码、Config v1->v2 迁移
+	var ma := loader.get_meswin_assets()
+	_check((ma["auto_btn_on"] as Texture2D).get_size() == Vector2(137, 40), "auto_btn_on 应为 137x40")
+	_check((ma["auto_btn_off"] as Texture2D).get_size() == Vector2(119, 39), "auto_btn_off 应为 119x39")
+	_check((ma["skip_btn_on"] as Texture2D).get_size() == Vector2(119, 39), "skip_btn_on 应为 119x39")
+	_check((ma["skip_btn_off"] as Texture2D).get_size() == Vector2(119, 39), "skip_btn_off 应为 119x39")
+	var pa := loader.get_phone_assets()
+	_check((pa["rine_bg"] as Texture2D).get_size() == Vector2(456, 696), "rine_bg 应剔除底部紫条至 456x696")
+	_check((pa["settings_bg"] as Texture2D).get_size() == Vector2(446, 744), "settings_bg 应为纯净斜光底 446x744")
+	_check(pa.get("rine_emoji", null) != null and pa.get("rine_send_arrow", null) != null, "RINE 表情与发送箭头纹理应存在")
+
+	var pd_chk := main_node.phone_drawer
+	_check(pd_chk._messages.is_empty(), "开局未触发 RINE 事件前不应注入假聊天消息")
+	pd_chk._on_rine_event(0, [2, 3, 4, 5, 6, 7, 8])
+	_check(pd_chk._messages.is_empty(), "RINE subop=0 初始化指令不应作为消息气泡输出")
+	pd_chk._on_rine_event(15, [1, 0, 5])
+	_check(pd_chk._messages.size() == 1 and int(pd_chk._messages[0].get("str_id", -1)) == 5 and not bool(pd_chk._messages[0].get("self", true)),
+		"RINE subop=15 文本应解码 args[2]=5 且标记对方消息")
+	pd_chk._on_rine_event(15, [0, 1, 2])
+	_check(pd_chk._messages.size() == 2 and pd_chk._messages[1].get("type", "") == "sticker" and int(pd_chk._messages[1].get("idx", -1)) == 2 and bool(pd_chk._messages[1].get("self", false)),
+		"RINE subop=15 贴纸应解码 args[2]=2 且标记己方发送")
+
+	var cfg_test := ConfigManager.new()
+	var old_f := FileAccess.open(ConfigManager.CONFIG_PATH, FileAccess.WRITE)
+	if old_f != null:
+		old_f.store_string("{\"skip_unread\": false}")
+		old_f.close()
+	cfg_test.load_config()
+	_check(cfg_test.skip_unread == true, "旧版 v1 config.json 的 skip_unread=false 应自动迁移为 true")
+	if FileAccess.file_exists(ConfigManager.CONFIG_PATH):
+		DirAccess.remove_absolute(ConfigManager.CONFIG_PATH)
+	print("[8/8] Exact DDS slices, RINE event decoder & Config v2 migration ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)

@@ -69,7 +69,10 @@ var _status_label: Label = null
 var _top_status_date: Label = null
 var _chat_title_label: Label = null
 var _connect_bar: HBoxContainer = null
+var _rine_header_bg: TextureRect = null
 var _rine_input_bg: TextureRect = null
+var _rine_emoji_tex: TextureRect = null
+var _rine_send_tex: TextureRect = null
 
 var _screen_home: Control = null
 var _screen_contacts: Control = null
@@ -99,6 +102,7 @@ var _phone_assets: Dictionary = {}
 var _phone_bytes: PackedByteArray = PackedByteArray()
 var _phone_offsets: PackedInt32Array = PackedInt32Array()
 var _messages: Array[Dictionary] = []
+var _reply_options: Array[int] = []
 
 
 func _ready() -> void:
@@ -114,15 +118,19 @@ func _ensure_ui() -> void:
 		return
 	_drawer = Control.new()
 	_drawer.name = "PhoneDrawer"
-	_drawer.size = Vector2(620, 1080)
-	_drawer.position = Vector2(1920, 0) # 默认隐藏于右侧画面外
+	# 缩放至 0.84 并在 y=940 处裁剪红框下缘，使屏幕与硬件按键完整落在对话金线 (y=762) 上方而不遮挡字幕
+	_drawer.size = Vector2(620, 940)
+	_drawer.scale = Vector2(0.84, 0.84)
+	_drawer.position = Vector2(1920, -28) # 默认隐藏于右侧画面外
+	_drawer.clip_contents = true
 	_drawer.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_drawer)
 
 	# 1. 手机红色外壳底图置于底层（注意：PHONE.DDS 屏幕区域是不透明黑色，绝不可盖在 _screen_root 上层）
 	_frame_tex = TextureRect.new()
 	_frame_tex.name = "PhoneCaseFrame"
-	_frame_tex.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_frame_tex.position = Vector2.ZERO
+	_frame_tex.size = Vector2(620, 1080)
 	_frame_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_frame_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_frame_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -157,15 +165,15 @@ func _ensure_ui() -> void:
 	top_bar.add_child(_xp_bar_tex)
 
 	_top_status_date = Label.new()
-	_top_status_date.position = Vector2(54, 10)
-	_top_status_date.size = Vector2(180, 24)
+	_top_status_date.position = Vector2(96, 9)
+	_top_status_date.size = Vector2(84, 26)
 	_top_status_date.add_theme_font_size_override("font_size", 14)
 	_top_status_date.add_theme_color_override("font_color", Color(0.86, 0.92, 0.98, 0.95))
 	top_bar.add_child(_top_status_date)
 
 	_status_label = Label.new()
-	_status_label.position = Vector2(210, 10)
-	_status_label.size = Vector2(110, 24)
+	_status_label.position = Vector2(182, 9)
+	_status_label.size = Vector2(126, 26)
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_status_label.text = "HOME"
 	_status_label.add_theme_font_size_override("font_size", 14)
@@ -173,9 +181,9 @@ func _ensure_ui() -> void:
 	top_bar.add_child(_status_label)
 
 	var btn_close := Button.new()
-	btn_close.text = "收起"
-	btn_close.position = Vector2(326, 6)
-	btn_close.size = Vector2(54, 30)
+	btn_close.text = "✕"
+	btn_close.position = Vector2(314, 7)
+	btn_close.size = Vector2(34, 28)
 	btn_close.focus_mode = Control.FOCUS_NONE
 	btn_close.add_theme_font_size_override("font_size", 13)
 	btn_close.add_theme_stylebox_override("normal", _make_flat_box(Color(0.18, 0.22, 0.30, 0.85), Color(0.75, 0.45, 0.20, 0.85), 6))
@@ -367,7 +375,15 @@ func _build_chat_screen() -> void:
 	bg_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_screen_chat.add_child(bg_tex)
 
-	_chat_title_label = _add_subpage_header(_screen_chat, "RINE · 椎名 真由理", func(): _go_back(), Color(0.94, 0.96, 0.98, 0.92), Color(0.15, 0.22, 0.30, 1.0))
+	_rine_header_bg = TextureRect.new()
+	_rine_header_bg.position = Vector2(0, 0)
+	_rine_header_bg.size = Vector2(SCREEN_W, 46)
+	_rine_header_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_rine_header_bg.stretch_mode = TextureRect.STRETCH_SCALE
+	_rine_header_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_screen_chat.add_child(_rine_header_bg)
+
+	_chat_title_label = _add_subpage_header(_screen_chat, "RINE · 椎名 真由理", func(): _go_back(), Color(0.94, 0.96, 0.98, 0.72), Color(0.15, 0.22, 0.30, 1.0))
 
 	_msg_scroll = ScrollContainer.new()
 	_msg_scroll.position = Vector2(8, 52)
@@ -379,26 +395,48 @@ func _build_chat_screen() -> void:
 	_msg_list.add_theme_constant_override("separation", 8)
 	_msg_scroll.add_child(_msg_list)
 
-	# 底部 PC 原版 RINE 栏（贴纸表情开关 + 快捷发送条）
+	# 底部 PC 原版 RINE 输入栏（左：桶子贴纸按钮，中：白底胶囊输入条，右：发送箭头）
 	var input_bar := Control.new()
 	input_bar.position = Vector2(0, BODY_H - 68)
 	input_bar.size = Vector2(SCREEN_W, 68)
 	_screen_chat.add_child(input_bar)
 
+	var bar_plate := ColorRect.new()
+	bar_plate.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bar_plate.color = Color(0.93, 0.95, 0.97, 0.96)
+	bar_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	input_bar.add_child(bar_plate)
+
+	_rine_emoji_tex = TextureRect.new()
+	_rine_emoji_tex.position = Vector2(6, 11)
+	_rine_emoji_tex.size = Vector2(46, 46)
+	_rine_emoji_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_rine_emoji_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_rine_emoji_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	input_bar.add_child(_rine_emoji_tex)
+
 	_rine_input_bg = TextureRect.new()
-	_rine_input_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_rine_input_bg.position = Vector2(54, 4)
+	_rine_input_bg.size = Vector2(346, 60)
 	_rine_input_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_rine_input_bg.stretch_mode = TextureRect.STRETCH_SCALE
 	_rine_input_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	input_bar.add_child(_rine_input_bg)
 
+	_rine_send_tex = TextureRect.new()
+	_rine_send_tex.position = Vector2(404, 13)
+	_rine_send_tex.size = Vector2(42, 42)
+	_rine_send_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_rine_send_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_rine_send_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	input_bar.add_child(_rine_send_tex)
+
 	var btn_toggle_st := Button.new()
-	btn_toggle_st.text = "贴纸"
-	btn_toggle_st.position = Vector2(6, 12)
-	btn_toggle_st.size = Vector2(56, 44)
+	btn_toggle_st.text = ""
+	btn_toggle_st.position = Vector2(4, 10)
+	btn_toggle_st.size = Vector2(50, 48)
 	btn_toggle_st.flat = true
 	btn_toggle_st.focus_mode = Control.FOCUS_NONE
-	btn_toggle_st.add_theme_color_override("font_color", Color(0.25, 0.35, 0.45, 0.01))
 	btn_toggle_st.pressed.connect(func():
 		_sticker_tray_visible = not _sticker_tray_visible
 		_sticker_panel.visible = _sticker_tray_visible
@@ -407,26 +445,35 @@ func _build_chat_screen() -> void:
 	input_bar.add_child(btn_toggle_st)
 
 	var btn_quick := Button.new()
-	btn_quick.text = "发送回复：了解，我现在过去"
-	btn_quick.position = Vector2(72, 14)
+	btn_quick.text = "点击选择回复..."
+	btn_quick.position = Vector2(66, 14)
 	btn_quick.size = Vector2(320, 40)
 	btn_quick.flat = true
 	btn_quick.focus_mode = Control.FOCUS_NONE
-	btn_quick.add_theme_font_size_override("font_size", 16)
-	btn_quick.add_theme_color_override("font_color", Color(0.22, 0.28, 0.36, 0.92))
+	btn_quick.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn_quick.add_theme_font_size_override("font_size", 15)
+	btn_quick.add_theme_color_override("font_color", Color(0.45, 0.50, 0.58, 0.92))
 	btn_quick.pressed.connect(func():
-		_append_text_msg(0, "了解，我现在就去确认。", true)
+		if not _reply_options.is_empty():
+			var rid := int(_reply_options.pop_front())
+			_append_sc3_msg(0, rid, true)
+		else:
+			_append_text_msg(0, "了解，我现在就去确认。", true)
 	)
 	input_bar.add_child(btn_quick)
 
 	var btn_send := Button.new()
 	btn_send.text = ""
-	btn_send.position = Vector2(398, 12)
-	btn_send.size = Vector2(50, 44)
+	btn_send.position = Vector2(400, 10)
+	btn_send.size = Vector2(50, 48)
 	btn_send.flat = true
 	btn_send.focus_mode = Control.FOCUS_NONE
 	btn_send.pressed.connect(func():
-		_append_text_msg(0, "没问题！稍后联络。", true)
+		if not _reply_options.is_empty():
+			var rid := int(_reply_options.pop_front())
+			_append_sc3_msg(0, rid, true)
+		else:
+			_append_text_msg(0, "没问题！稍后联络。", true)
 	)
 	input_bar.add_child(btn_send)
 
@@ -543,7 +590,7 @@ func _build_wallpaper_screen() -> void:
 	_screen_wallpaper.visible = false
 	_screen_root.add_child(_screen_wallpaper)
 
-	# 对齐 PC 视频 f_044.jpg：所选壁纸全屏铺满内屏预览，底部横向缩略图条切换
+	# 对齐 PC 视频 f_044.jpg：壁纸全屏铺满内屏，顶部半透极简返回与编号，底部清爽横向缩略图条
 	_wp_preview_tex = TextureRect.new()
 	_wp_preview_tex.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_wp_preview_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -551,28 +598,29 @@ func _build_wallpaper_screen() -> void:
 	_wp_preview_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_screen_wallpaper.add_child(_wp_preview_tex)
 
-	_wp_title_label = _add_subpage_header(_screen_wallpaper, "壁纸 01 / 12", func(): _go_back(), Color(0.06, 0.08, 0.14, 0.75))
+	_wp_title_label = _add_subpage_header(_screen_wallpaper, "壁纸 01 / 12", func(): _go_back(), Color(0.03, 0.05, 0.10, 0.36))
 
 	var tray := ColorRect.new()
-	tray.position = Vector2(0, BODY_H - 166)
-	tray.size = Vector2(SCREEN_W, 166)
-	tray.color = Color(0.03, 0.05, 0.10, 0.65)
+	tray.position = Vector2(0, BODY_H - 128)
+	tray.size = Vector2(SCREEN_W, 128)
+	tray.color = Color(0.02, 0.04, 0.08, 0.35)
+	tray.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_screen_wallpaper.add_child(tray)
 
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(8, BODY_H - 156)
-	scroll.size = Vector2(SCREEN_W - 16, 148)
+	scroll.position = Vector2(8, BODY_H - 120)
+	scroll.size = Vector2(SCREEN_W - 16, 114)
 	_screen_wallpaper.add_child(scroll)
 
 	var hbox := HBoxContainer.new()
 	hbox.name = "WallpaperThumbRow"
-	hbox.add_theme_constant_override("separation", 8)
+	hbox.add_theme_constant_override("separation", 6)
 	scroll.add_child(hbox)
 
 	_wp_thumb_buttons.clear()
 	for i in range(12):
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(86, 132)
+		btn.custom_minimum_size = Vector2(72, 108)
 		btn.expand_icon = true
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(func(): select_wallpaper(i))
@@ -716,9 +764,18 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader, audio: MgsAudioMgr = n
 			var rtex := _screen_chat.get_node_or_null("RineWallpaperTex") as TextureRect
 			if rtex != null:
 				rtex.texture = rine_bg
+		var rine_hdr: Texture2D = _phone_assets.get("rine_header_bar", null)
+		if rine_hdr != null and _rine_header_bg != null:
+			_rine_header_bg.texture = rine_hdr
 		var rine_bar: Texture2D = _phone_assets.get("rine_input_bar", null)
 		if rine_bar != null and _rine_input_bg != null:
 			_rine_input_bg.texture = rine_bar
+		var rine_em: Texture2D = _phone_assets.get("rine_emoji", null)
+		if rine_em != null and _rine_emoji_tex != null:
+			_rine_emoji_tex.texture = rine_em
+		var rine_sa: Texture2D = _phone_assets.get("rine_send_arrow", null)
+		if rine_sa != null and _rine_send_tex != null:
+			_rine_send_tex.texture = rine_sa
 		var set_bg: Texture2D = _phone_assets.get("settings_bg", null)
 		if set_bg != null and _screen_settings != null:
 			var stex := _screen_settings.get_node_or_null("SettingsBgTex") as TextureRect
@@ -774,11 +831,6 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader, audio: MgsAudioMgr = n
 	var saved_rt: int = _config.phone_ringtone_idx if _config != null else 0
 	select_wallpaper(saved_wp)
 	select_ringtone(saved_rt, false)
-
-	if _messages.is_empty():
-		_append_text_msg(1, "嘟嘟噜♪ 真由理发来了一条问候！", false)
-		if not _phone_offsets.is_empty():
-			_append_sc3_msg(1, 0)
 
 
 func _open_contacts_app() -> void:
@@ -923,7 +975,7 @@ func open_phone() -> void:
 	_ensure_ui()
 	_sync_status_date()
 	_is_open = true
-	_animate_x(1290.0)
+	_animate_x(1340.0)
 	panel_toggled.emit(true)
 
 
@@ -971,25 +1023,42 @@ func _on_phone_event(subop: int, args: Array) -> void:
 
 
 func _on_rine_event(subop: int, args: Array) -> void:
-	if subop == 0 or subop == 12 or subop == 15:
-		var cid := int(args[0]) if args.size() > 0 else 0
-		var msg_idx := int(args[1]) if args.size() > 1 else -1
-		if msg_idx >= 0 and msg_idx < _phone_offsets.size():
-			_append_sc3_msg(cid % maxi(1, _avatars.size()), msg_idx)
+	# 依据 _rndrine.scx:
+	# 0x00 = RINE 会话初始化 (非聊天消息), 0x0c = 切换当前联系人, 0x0d = 注册可回复项,
+	# 0x0f (15) / 0x2e (46) = 追加消息 (side[0=己方,1=对方], type[0=文本ID,1=贴纸ID], payload_id)
+	if subop == 0:
+		return
+	elif subop == 12:
+		if args.size() > 0:
+			var raw_cid := int(args[0])
+			_active_contact_idx = clampi(raw_cid, 0, CONTACT_DEFS.size() - 1)
+			_refresh_chat_header()
+	elif subop == 13:
+		for a in args:
+			var opt_id := int(a)
+			if opt_id > 0 and opt_id < _phone_offsets.size() and not _reply_options.has(opt_id):
+				_reply_options.append(opt_id)
+	elif subop == 15 or subop == 46:
+		var side := int(args[0]) if args.size() > 0 else 1
+		var msg_type := int(args[1]) if args.size() > 1 else 0
+		var payload_id := int(args[2]) if args.size() > 2 else -1
+		var is_self := (side == 0)
+		if msg_type == 1:
+			if payload_id >= 0 and payload_id < _stickers.size():
+				_append_sticker_msg(payload_id, is_self)
 		else:
-			_append_text_msg(cid % maxi(1, _avatars.size()), "收到新 RINE 消息 #%d" % msg_idx, false)
-	elif subop == 13 or subop == 46:
-		var st_idx := int(args[1]) if args.size() > 1 else 0
-		if st_idx >= 0 and st_idx < _stickers.size():
-			_append_sticker_msg(st_idx)
+			if payload_id >= 0 and payload_id < _phone_offsets.size():
+				var av_idx := 0 if is_self else (_active_contact_idx % maxi(1, _avatars.size()))
+				_append_sc3_msg(av_idx, payload_id, is_self)
 
 
-func _append_sc3_msg(avatar_idx: int, str_id: int) -> void:
+func _append_sc3_msg(avatar_idx: int, str_id: int, is_self: bool = false) -> void:
 	if _phone_bytes.is_empty() or str_id < 0 or str_id >= _phone_offsets.size():
 		return
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	if avatar_idx >= 0 and avatar_idx < _avatars.size() and _avatars[avatar_idx] != null:
+	row.alignment = BoxContainer.ALIGNMENT_END if is_self else BoxContainer.ALIGNMENT_BEGIN
+	if not is_self and avatar_idx >= 0 and avatar_idx < _avatars.size() and _avatars[avatar_idx] != null:
 		var av := TextureRect.new()
 		av.texture = _avatars[avatar_idx]
 		av.custom_minimum_size = Vector2(44, 48)
@@ -998,30 +1067,33 @@ func _append_sc3_msg(avatar_idx: int, str_id: int) -> void:
 		row.add_child(av)
 
 	var bubble := PanelContainer.new()
-	bubble.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bubble.custom_minimum_size = Vector2(340, 56)
-	bubble.add_theme_stylebox_override("panel", _make_flat_box(Color(0.95, 0.97, 0.99, 0.96), Color(0.60, 0.74, 0.88, 0.85), 10))
+	bubble.size_flags_horizontal = Control.SIZE_SHRINK_END if is_self else Control.SIZE_EXPAND_FILL
+	bubble.custom_minimum_size = Vector2(280, 56) if is_self else Vector2(340, 56)
+	var bg_col := Color(0.46, 0.82, 0.34, 0.96) if is_self else Color(0.95, 0.97, 0.99, 0.96)
+	var bd_col := Color(0.32, 0.68, 0.22, 0.85) if is_self else Color(0.60, 0.74, 0.88, 0.85)
+	bubble.add_theme_stylebox_override("panel", _make_flat_box(bg_col, bd_col, 10))
 
 	var holder := Control.new()
-	holder.custom_minimum_size = Vector2(320, 44)
+	var max_w := 260.0 if is_self else 320.0
+	holder.custom_minimum_size = Vector2(max_w, 44)
 	bubble.add_child(holder)
 
 	var fr := MgsFontRenderer.new()
 	fr.bind_vfs(_vfs)
-	fr.base_scale = 0.50
-	fr.line_height = 28.0
-	fr.max_line_width = 310.0
-	fr.default_color = Color(0.10, 0.14, 0.20, 1.0)
+	fr.base_scale = 0.56
+	fr.line_height = 30.0
+	fr.max_line_width = max_w - 10.0
+	fr.default_color = Color(0.08, 0.12, 0.18, 1.0)
 	fr.shadow_offset = Vector2.ZERO
 	holder.add_child(fr)
 	fr.set_sc3_string(_phone_bytes, int(_phone_offsets[str_id]), _vm, null, true)
 	var line_h_est := maxf(42.0, fr.get_content_size().y + 10.0)
-	holder.custom_minimum_size = Vector2(320, line_h_est)
-	bubble.custom_minimum_size = Vector2(340, line_h_est + 12.0)
+	holder.custom_minimum_size = Vector2(max_w, line_h_est)
+	bubble.custom_minimum_size = Vector2(max_w + 20.0, line_h_est + 12.0)
 
 	row.add_child(bubble)
 	_msg_list.add_child(row)
-	_messages.append({"type": "sc3", "str_id": str_id})
+	_messages.append({"type": "sc3", "str_id": str_id, "self": is_self})
 	_scroll_chat_to_bottom()
 
 
@@ -1058,11 +1130,21 @@ func _append_text_msg(avatar_idx: int, txt: String, is_self: bool) -> void:
 	_scroll_chat_to_bottom()
 
 
-func _append_sticker_msg(sticker_idx: int) -> void:
+func _append_sticker_msg(sticker_idx: int, is_self: bool = true) -> void:
 	if sticker_idx < 0 or sticker_idx >= _stickers.size():
 		return
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_END if is_self else BoxContainer.ALIGNMENT_BEGIN
+	if not is_self:
+		var av_idx := _active_contact_idx % maxi(1, _avatars.size())
+		if av_idx >= 0 and av_idx < _avatars.size() and _avatars[av_idx] != null:
+			var av := TextureRect.new()
+			av.texture = _avatars[av_idx]
+			av.custom_minimum_size = Vector2(44, 48)
+			av.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			av.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			row.add_child(av)
 	var tr := TextureRect.new()
 	tr.texture = _stickers[sticker_idx]
 	tr.custom_minimum_size = Vector2(116, 116)
@@ -1070,7 +1152,7 @@ func _append_sticker_msg(sticker_idx: int) -> void:
 	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	row.add_child(tr)
 	_msg_list.add_child(row)
-	_messages.append({"type": "sticker", "idx": sticker_idx})
+	_messages.append({"type": "sticker", "idx": sticker_idx, "self": is_self})
 	_scroll_chat_to_bottom()
 
 

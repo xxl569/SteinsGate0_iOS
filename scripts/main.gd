@@ -243,7 +243,7 @@ func _mount_and_boot() -> void:
 			panels.show_dialogue_mode()
 			gesture_helper.set_dialogue_mode(true)
 			var clicks_left := _cli_advance_clicks
-			for _s in range(2400):
+			for _s in range(4500):
 				vm.step_frame(1)
 				if _cli_skip_movies and video.is_movie_playing():
 					video.stop_movie(true)
@@ -512,8 +512,10 @@ func _on_vm_choices_requested(choices: Array) -> void:
 	panels.show_choices(choices)
 
 
-func _on_vm_trigger_event(_subop: int, _args: Array) -> void:
-	if _skip_mode and config != null and config.skip_stop_on_trigger:
+func _on_vm_trigger_event(subop: int, args: Array) -> void:
+	# 仅真实来电 (1 / 10:1) 或真实收到 RINE 消息 (15 / 46) 时才停止快进，避免后台系统初始化误停快进
+	var is_real_trigger := (subop == 1 or subop == 15 or subop == 46 or (subop == 10 and args.size() >= 1 and int(args[0]) == 1))
+	if is_real_trigger and _skip_mode and config != null and config.skip_stop_on_trigger:
 		_skip_mode = false
 		_update_mode_indicators()
 
