@@ -62,6 +62,9 @@ var _byoa_view: Control = null
 var _byoa_detail: Label = null
 var _tips_banner_tex: Texture2D = null
 var _tips_banner_rect: TextureRect = null
+var _tips_banner_title: MgsFontRenderer = null
+var _tips_scx_bytes: PackedByteArray = PackedByteArray()
+var _tips_scx_offsets: PackedInt32Array = PackedInt32Array()
 var _tips_toast: PanelContainer = null
 var _tips_toast_label: Label = null
 var _tips_toast_timer: float = 0.0
@@ -425,11 +428,11 @@ func _process(delta: float) -> void:
 		_tips_toast_timer -= delta
 		var elapsed := TIPS_TOAST_DURATION - _tips_toast_timer
 		var alpha := 1.0
-		var y_off := 18.0
+		var y_off := 28.0
 		if elapsed < 0.22:
 			var t := clampf(elapsed / 0.22, 0.0, 1.0)
 			alpha = t
-			y_off = lerpf(-60.0, 18.0, t * (2.0 - t))
+			y_off = lerpf(-60.0, 28.0, t * (2.0 - t))
 		elif _tips_toast_timer < 0.45:
 			alpha = clampf(_tips_toast_timer / 0.45, 0.0, 1.0)
 		if _tips_toast_timer <= 0.0:
@@ -484,10 +487,29 @@ func show_quicksaved_toast() -> void:
 		_quicksave_timer = 1.8
 
 
+func _ensure_tips_scx_loaded() -> void:
+	if not _tips_scx_bytes.is_empty() or _vfs == null or not _vfs.is_mounted:
+		return
+	if not _vfs.has_entry("script.mpk", "_tips.scx"):
+		return
+	_tips_scx_bytes = _vfs.read_entry("script.mpk", "_tips.scx")
+	if _tips_scx_bytes.size() < 16:
+		_tips_scx_bytes = PackedByteArray()
+		return
+	var str_tbl := int(_tips_scx_bytes.decode_u32(4))
+	var ret_tbl := int(_tips_scx_bytes.decode_u32(8))
+	@warning_ignore("integer_division")
+	var count := maxi(0, (ret_tbl - str_tbl) / 4)
+	_tips_scx_offsets.resize(count)
+	for i in range(count):
+		_tips_scx_offsets[i] = int(_tips_scx_bytes.decode_u32(str_tbl + i * 4))
+
+
 func show_tips_toast(tip_id: int) -> void:
 	if _cfg != null and not _cfg.show_tips_popup:
 		return
 	_ensure_ui()
+	_ensure_tips_scx_loaded()
 	if _tips_banner_tex == null and _theme_loader != null and _vfs != null and _vfs.is_mounted:
 		_tips_banner_tex = _theme_loader.get_meswin_assets().get("tips_banner", null) as Texture2D
 
@@ -496,16 +518,33 @@ func show_tips_toast(tip_id: int) -> void:
 			_tips_banner_rect = TextureRect.new()
 			_tips_banner_rect.name = "TipsUnlockedBanner"
 			_tips_banner_rect.size = Vector2(762, 102)
-			_tips_banner_rect.position = Vector2((1920.0 - 762.0) * 0.5, 18.0)
+			_tips_banner_rect.position = Vector2((1920.0 - 762.0) * 0.5, 28.0)
 			_tips_banner_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			_tips_banner_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			_tips_banner_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			_tips_banner_rect.z_index = 20
 			add_child(_tips_banner_rect)
+
+			_tips_banner_title = MgsFontRenderer.new()
+			_tips_banner_title.name = "TipsBannerTitle"
+			_tips_banner_title.position = Vector2(114, 42)
+			_tips_banner_title.base_scale = 0.80
+			_tips_banner_title.max_line_width = 610.0
+			_tips_banner_title.default_color = Color(0.20, 0.76, 1.0, 1.0)
+			_tips_banner_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_tips_banner_rect.add_child(_tips_banner_title)
 		_tips_banner_rect.texture = _tips_banner_tex
-		_tips_banner_rect.position = Vector2((1920.0 - 762.0) * 0.5, 18.0)
+		_tips_banner_rect.position = Vector2((1920.0 - 762.0) * 0.5, 28.0)
 		_tips_banner_rect.modulate.a = 1.0
 		_tips_banner_rect.visible = true
+		if _tips_banner_title != null:
+			_tips_banner_title.bind_vfs(_vfs)
+			var str_idx := 11 + tip_id * 5 + 1
+			if str_idx >= 11 and str_idx < _tips_scx_offsets.size() and not _tips_scx_bytes.is_empty():
+				_tips_banner_title.set_sc3_string(_tips_scx_bytes, int(_tips_scx_offsets[str_idx]), _vm, null, true)
+				_tips_banner_title.visible = true
+			else:
+				_tips_banner_title.visible = false
 		if _tips_toast != null:
 			_tips_toast.visible = false
 	else:
@@ -570,10 +609,36 @@ func show_dialogue_mode() -> void:
 
 
 func toggle_hide_ui() -> void:
-	_ui_hidden = not _ui_hidden
-	if not _title_view.visible:
+	set_ui_hidden(not _ui_hidden)
+
+
+func set_ui_hidden(hidden: bool) -> void:
+	_ui_hidden = hidden
+	if not _title_view.visible and not _byoa_view.visible:
 		_dialogue_view.visible = not _ui_hidden
 	ui_hidden_changed.emit(_ui_hidden)
+
+
+func _input(event: InputEvent) -> void:
+	if not _ui_hidden or _title_view == null or _title_view.visible or (_byoa_view != null and _byoa_view.visible) or has_modal_open():
+		return
+	var emulate_mouse := bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", false))
+	var should_restore := false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and (mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT):
+			should_restore = true
+	elif not emulate_mouse and event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			should_restore = true
+	elif event is InputEventKey:
+		var ke := event as InputEventKey
+		if ke.pressed and not ke.echo and ke.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE, KEY_H]:
+			should_restore = true
+	if should_restore:
+		set_ui_hidden(false)
+		get_viewport().set_input_as_handled()
 
 
 func set_mode_badge(auto_on: bool, skip_on: bool) -> void:

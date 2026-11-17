@@ -345,6 +345,8 @@ func start_new_game() -> void:
 	stage.visible = true
 	gesture_helper.set_movie_playing(false)
 	_update_mode_indicators()
+	if panels != null:
+		panels.set_ui_hidden(false)
 	stage.reset_stage()
 	phone_drawer.reset_phone_state()
 	_last_dialogue_entry.clear()
@@ -381,6 +383,7 @@ func return_to_title() -> void:
 	_last_dialogue_entry.clear()
 	if panels != null:
 		panels.close_all_modals()
+		panels.set_ui_hidden(false)
 	if tips_panel != null:
 		tips_panel.visible = false
 	if gallery != null:
@@ -457,9 +460,13 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _running_story and not video.is_movie_playing() and not (panels != null and panels.has_modal_open()):
+	if _running_story and not video.is_movie_playing() and not (panels != null and panels.has_modal_open()) and not (tips_panel != null and tips_panel.visible) and not (gallery != null and gallery.visible):
 		if event.is_action_pressed("ui_accept"):
 			_on_user_advance()
+		elif event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and panels != null and panels._dialogue_view != null and not panels._dialogue_view.visible and not panels._ui_hidden:
+				_on_user_advance()
 
 
 func _notification(what: int) -> void:
@@ -619,6 +626,7 @@ func _on_load_slot(slot_id: int) -> void:
 			audio.stop_voice()
 		if panels != null:
 			panels.close_all_modals()
+			panels.set_ui_hidden(false)
 		if tips_panel != null:
 			tips_panel.visible = false
 		if gallery != null:

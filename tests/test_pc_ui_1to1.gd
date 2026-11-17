@@ -632,6 +632,29 @@ func _run() -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(Sc3Vm.UNLOCKED_TIPS_PATH))
 	print("[12/12] WAIT 20-frame ring, 0x10 0x27 TIPS unlock, top-center DATA01 banner & UiTips update ok")
 
+	# 13. TIPS 横幅应渲染具体词条名称且隐藏 UI 后点击屏幕可正常恢复（防止 UPX 等场景卡死）
+	main_node.panels.show_tips_toast(73)
+	_check(main_node.panels._tips_banner_title != null and main_node.panels._tips_banner_title.visible,
+		"TIPS 横幅应显示具体词条名称节点")
+	if main_node.panels._tips_banner_title != null:
+		_check(not main_node.panels._tips_banner_title._glyphs.is_empty(),
+			"TIPS 横幅名称节点应已解析渲染字形")
+	main_node.panels.hide_tips_toast()
+
+	main_node.panels.show_dialogue_mode()
+	main_node.gesture_helper.set_dialogue_mode(true)
+	main_node.panels.toggle_hide_ui()
+	_check(main_node.panels._ui_hidden and main_node.gesture_helper.is_ui_hidden,
+		"toggle_hide_ui 应同步隐藏对白与 HUD")
+	var unhide_ev := InputEventMouseButton.new()
+	unhide_ev.button_index = MOUSE_BUTTON_LEFT
+	unhide_ev.pressed = true
+	unhide_ev.position = Vector2(640, 360)
+	main_node.panels._input(unhide_ev)
+	_check(not main_node.panels._ui_hidden and not main_node.gesture_helper.is_ui_hidden,
+		"隐藏 UI 状态下点击屏幕任意位置应立即恢复显示，禁止卡死")
+	print("[13/13] TIPS banner title rendering & UI-hidden tap-to-restore ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)
