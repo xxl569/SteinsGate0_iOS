@@ -60,9 +60,12 @@ var _config_view: UiConfigPanel = null
 
 var _byoa_view: Control = null
 var _byoa_detail: Label = null
+var _tips_banner_tex: Texture2D = null
+var _tips_banner_rect: TextureRect = null
 var _tips_toast: PanelContainer = null
 var _tips_toast_label: Label = null
 var _tips_toast_timer: float = 0.0
+const TIPS_TOAST_DURATION := 3.2
 
 var _built: bool = false
 var _ui_hidden: bool = false
@@ -264,9 +267,9 @@ func _build_dialogue_view() -> void:
 
 	_wait_ring = TextureRect.new()
 	_wait_ring.name = "WaitRingCursor"
-	_wait_ring.position = Vector2(1676, 932)
-	_wait_ring.size = Vector2(40, 40)
-	_wait_ring.pivot_offset = Vector2(20, 20)
+	_wait_ring.position = Vector2(1672, 928)
+	_wait_ring.size = Vector2(48, 48)
+	_wait_ring.pivot_offset = Vector2(24, 24)
 	_wait_ring.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_wait_ring.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_wait_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -411,14 +414,36 @@ func _bind_textures_and_renderers() -> void:
 			_wait_ring.texture = m_assets["wait_ring"] as Texture2D
 		if m_assets.get("quicksave_gear", null) != null and _quicksave_toast != null:
 			_quicksave_toast.texture = m_assets["quicksave_gear"] as Texture2D
+		_tips_banner_tex = m_assets.get("tips_banner", null) as Texture2D
+		if _tips_banner_rect != null and _tips_banner_tex != null:
+			_tips_banner_rect.texture = _tips_banner_tex
 
 
 func _process(delta: float) -> void:
 	_blink_t += delta
-	if _tips_toast != null and _tips_toast.visible:
+	if _tips_toast_timer > 0.0:
 		_tips_toast_timer -= delta
+		var elapsed := TIPS_TOAST_DURATION - _tips_toast_timer
+		var alpha := 1.0
+		var y_off := 18.0
+		if elapsed < 0.22:
+			var t := clampf(elapsed / 0.22, 0.0, 1.0)
+			alpha = t
+			y_off = lerpf(-60.0, 18.0, t * (2.0 - t))
+		elif _tips_toast_timer < 0.45:
+			alpha = clampf(_tips_toast_timer / 0.45, 0.0, 1.0)
 		if _tips_toast_timer <= 0.0:
-			_tips_toast.visible = false
+			if _tips_banner_rect != null:
+				_tips_banner_rect.visible = false
+			if _tips_toast != null:
+				_tips_toast.visible = false
+		else:
+			if _tips_banner_rect != null and _tips_banner_rect.visible:
+				_tips_banner_rect.position.y = y_off
+				_tips_banner_rect.modulate.a = alpha
+			if _tips_toast != null and _tips_toast.visible:
+				_tips_toast.position.y = y_off
+				_tips_toast.modulate.a = alpha
 	if _quicksave_toast != null and _quicksave_toast.visible:
 		_quicksave_timer -= delta
 		if _quicksave_timer <= 0.0:
@@ -463,21 +488,47 @@ func show_tips_toast(tip_id: int) -> void:
 	if _cfg != null and not _cfg.show_tips_popup:
 		return
 	_ensure_ui()
-	if _tips_toast == null:
-		_tips_toast = PanelContainer.new()
-		_tips_toast.position = Vector2(28, 74)
-		_tips_toast.size = Vector2(360, 50)
-		_tips_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_tips_toast.add_theme_stylebox_override("panel", UiThemeLoader.make_dark_panel_style(Color(0.06, 0.09, 0.14, 0.92), Color(0.95, 0.58, 0.16, 0.95)))
-		add_child(_tips_toast)
-		_tips_toast_label = Label.new()
-		_tips_toast_label.add_theme_font_size_override("font_size", 18)
-		_tips_toast_label.modulate = Color(1.0, 0.84, 0.42)
-		_tips_toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_tips_toast.add_child(_tips_toast_label)
-	_tips_toast_label.text = "TIPS 已登录: No.%03d" % (tip_id + 1)
-	_tips_toast.visible = true
-	_tips_toast_timer = 3.2
+	if _tips_banner_tex == null and _theme_loader != null and _vfs != null and _vfs.is_mounted:
+		_tips_banner_tex = _theme_loader.get_meswin_assets().get("tips_banner", null) as Texture2D
+
+	if _tips_banner_tex != null:
+		if _tips_banner_rect == null:
+			_tips_banner_rect = TextureRect.new()
+			_tips_banner_rect.name = "TipsUnlockedBanner"
+			_tips_banner_rect.size = Vector2(762, 102)
+			_tips_banner_rect.position = Vector2((1920.0 - 762.0) * 0.5, 18.0)
+			_tips_banner_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			_tips_banner_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			_tips_banner_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_tips_banner_rect.z_index = 20
+			add_child(_tips_banner_rect)
+		_tips_banner_rect.texture = _tips_banner_tex
+		_tips_banner_rect.position = Vector2((1920.0 - 762.0) * 0.5, 18.0)
+		_tips_banner_rect.modulate.a = 1.0
+		_tips_banner_rect.visible = true
+		if _tips_toast != null:
+			_tips_toast.visible = false
+	else:
+		if _tips_toast == null:
+			_tips_toast = PanelContainer.new()
+			_tips_toast.name = "TipsUnlockedFallback"
+			_tips_toast.position = Vector2((1920.0 - 420.0) * 0.5, 22.0)
+			_tips_toast.size = Vector2(420, 54)
+			_tips_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_tips_toast.z_index = 20
+			_tips_toast.add_theme_stylebox_override("panel", UiThemeLoader.make_dark_panel_style(Color(0.06, 0.09, 0.14, 0.92), Color(0.95, 0.58, 0.16, 0.95)))
+			add_child(_tips_toast)
+			_tips_toast_label = Label.new()
+			_tips_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			_tips_toast_label.add_theme_font_size_override("font_size", 20)
+			_tips_toast_label.modulate = Color(1.0, 0.84, 0.42)
+			_tips_toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_tips_toast.add_child(_tips_toast_label)
+		_tips_toast_label.text = "取得了新的TIPS  No.%03d" % (tip_id + 1)
+		_tips_toast.position = Vector2((1920.0 - 420.0) * 0.5, 22.0)
+		_tips_toast.modulate.a = 1.0
+		_tips_toast.visible = true
+	_tips_toast_timer = TIPS_TOAST_DURATION
 
 
 func show_byoa_wizard(missing_paths: PackedStringArray) -> void:

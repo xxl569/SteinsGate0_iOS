@@ -304,7 +304,8 @@ func _run() -> void:
 	# 验证 show_tips_popup 提示条
 	main_node.config.show_tips_popup = true
 	main_node.panels.show_tips_toast(10)
-	_check(main_node.panels._tips_toast != null and main_node.panels._tips_toast.visible, "TIPS 登录提示条应显示")
+	var banner_ok := (main_node.panels._tips_banner_rect != null and main_node.panels._tips_banner_rect.visible) or (main_node.panels._tips_toast != null and main_node.panels._tips_toast.visible)
+	_check(banner_ok, "TIPS 登录提示条应显示")
 	tips.close_panel()
 	if FileAccess.file_exists(UiTips.TIPS_STATE_PATH):
 		DirAccess.remove_absolute(UiTips.TIPS_STATE_PATH)
@@ -548,6 +549,79 @@ func _run() -> void:
 	_check(ok_st and main_node.vm.get_flag(2614) == 0,
 		"贴纸回复模式下发送贴纸 1 应推进 L65 分支并清除 Flag(2614)")
 	print("[11/11] SKIP/AUTO/WAIT 3D-ring, sub=12/15 sender/avatar, initial RINE display, non-call PhoneCtrl & sticker-reply ok")
+
+	# ---------------------------------------------------------
+	# 12. 回归测试5：WAIT 金环 20 帧完整无截断 + 0x10 0x27 TIPS 实时解锁 + 正上方原版横幅 + UiTips 更新
+	# ---------------------------------------------------------
+	var mes_assets_chk: Dictionary = loader.get_meswin_assets()
+	var wframes_chk: Array = mes_assets_chk.get("wait_ring_frames", [])
+	_check(wframes_chk.size() == 20, "wait_ring_frames 应为 20 帧，实际=" + str(wframes_chk.size()))
+	for wi in range(wframes_chk.size()):
+		var wt := wframes_chk[wi] as Texture2D
+		_check(wt != null and wt.get_width() == 52 and wt.get_height() == 52, "wait_ring_frames[" + str(wi) + "] 尺寸应为 52x52")
+		if wt != null:
+			var wimg := wt.get_image()
+			var min_y := 999
+			var max_y := -1
+			for py in range(wimg.get_height()):
+				for px in range(wimg.get_width()):
+					if wimg.get_pixel(px, py).a > 0.05:
+						if py < min_y: min_y = py
+						if py > max_y: max_y = py
+			_check(max_y - min_y >= 24, "wait_ring_frames[" + str(wi) + "] 不可被裁成细条，实际像素高度=" + str(max_y - min_y + 1))
+
+	var t_banner := mes_assets_chk.get("tips_banner", null) as Texture2D
+	_check(t_banner != null and t_banner.get_width() == 762 and t_banner.get_height() == 102,
+		"DATA01.DDS tips_banner 切片应为 762x102")
+
+	# 测试实跑 SG0_00_01.scx 触发 0x10 0x27 TIPS 解锁与正上方横幅
+	main_node.vm.unlocked_tips.clear()
+	var sig_tips: Array[int] = []
+	main_node.vm.tips_unlocked.connect(func(tid: int): sig_tips.append(tid))
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_00_01.scx", 0)
+	var dbg_clicks := 0
+	for _st_i in range(6000):
+		main_node.vm.notify_mes_reveal_done()
+		main_node.vm.step_frame(1)
+		if main_node.vm.is_waiting_for_movie() or main_node.vm._movie_playing:
+			main_node.vm.notify_movie_finished()
+		if main_node.vm.is_waiting_for_click():
+			dbg_clicks += 1
+			main_node.vm.notify_user_advance()
+		if sig_tips.size() >= 2 and sig_tips.has(73) and sig_tips.has(144):
+			break
+	_check(sig_tips.has(73) and sig_tips.has(144),
+		"SG0_00_01.scx 实跑应通过 0x10 0x27 解锁 TIPS 73/144，实际=" + str(sig_tips))
+	_check(main_node.vm.get_scr_work(45) == 5,
+		"macrosys label 0x92/0x9a 应将 ScrWork[45] 设为高亮色 5，实际=" + str(main_node.vm.get_scr_work(45)))
+	# 再次触发同一个 tip_id 不应重复 emit
+	var prev_sig_cnt := sig_tips.size()
+	main_node.vm.unlock_tip(73)
+	_check(sig_tips.size() == prev_sig_cnt, "已解锁过的 TIPS 不应重复触发 tips_unlocked 信号")
+
+	# 验证正上方 TIPS 横幅在屏幕顶部正中
+	main_node.panels.show_tips_toast(73)
+	_check(main_node.panels._tips_banner_rect != null and main_node.panels._tips_banner_rect.visible,
+		"show_tips_toast 应展示 DATA01 原版 TIPS 横幅")
+	if main_node.panels._tips_banner_rect != null:
+		var bx: float = main_node.panels._tips_banner_rect.position.x
+		var by: float = main_node.panels._tips_banner_rect.position.y
+		_check(absf(bx - 579.0) < 4.0 and by >= 0.0 and by <= 30.0,
+			"TIPS 横幅应位于屏幕正上方居中 (x≈579.0, y<=30)，实际=(" + str(bx) + ", " + str(by) + ")")
+
+	# 验证 UiTips 列表与持久化状态实时更新
+	main_node.tips_panel.open_panel()
+	_check(main_node.tips_panel._is_tip_unlocked(73) and main_node.tips_panel._is_tip_unlocked(144),
+		"UiTips 应实时同步显示刚解锁的 TIPS 73/144")
+	main_node.tips_panel.close_panel()
+	# 清理测试产生的全局 unlocked_tips.json，避免污染本地存档环境
+	main_node.vm.unlocked_tips.clear()
+	if FileAccess.file_exists(Sc3Vm.UNLOCKED_TIPS_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(Sc3Vm.UNLOCKED_TIPS_PATH))
+	print("[12/12] WAIT 20-frame ring, 0x10 0x27 TIPS unlock, top-center DATA01 banner & UiTips update ok")
 
 	main_node.queue_free()
 	if _failed:

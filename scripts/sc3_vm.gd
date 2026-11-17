@@ -111,11 +111,41 @@ var _rine_trigger_label: int = -1
 var _last_phone_ctrl_arg: int = -1 # 记录最近一次 PhoneCtrl(10, arg) 参数以区分 RINE 通知与真正来电
 
 const READ_LINES_PATH := "user://read_lines.json"
+const UNLOCKED_TIPS_PATH := "user://unlocked_tips.json"
 
 
 func _init(vfs: MgsVfs = null) -> void:
 	_vfs = vfs
 	load_read_lines()
+	load_unlocked_tips()
+
+
+func load_unlocked_tips() -> void:
+	if not FileAccess.file_exists(UNLOCKED_TIPS_PATH):
+		return
+	var txt := FileAccess.get_file_as_string(UNLOCKED_TIPS_PATH)
+	var parsed: Variant = JSON.parse_string(txt)
+	if parsed is Array:
+		for tk in parsed:
+			unlocked_tips[int(tk)] = true
+
+
+func save_unlocked_tips() -> void:
+	var f := FileAccess.open(UNLOCKED_TIPS_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(unlocked_tips.keys()))
+		f.close()
+
+
+func unlock_tip(tip_id: int) -> bool:
+	if tip_id < 0:
+		return false
+	if unlocked_tips.has(tip_id):
+		return false
+	unlocked_tips[tip_id] = true
+	save_unlocked_tips()
+	tips_unlocked.emit(tip_id)
+	return true
 
 
 func load_read_lines() -> void:
@@ -1283,14 +1313,25 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				tip_id = _rd_u8(data, p); p += 1
 			th.pc = p
 			if tip_id >= 0:
-				unlocked_tips[tip_id] = true
-				tips_unlocked.emit(tip_id)
-		0x27:
+				unlock_tip(tip_id)
+		0x27: # SG0_TipsSet / TipsStatus (macrosys.scx label 0x92/0x9a 调用 0x10 0x27 sub=1)
 			var sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p)
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			var tip_id := int(e1["value"])
+			var out_flag_id := -1
 			if sub == 1:
-				p = Sc3Expr.skip(data, p)
+				var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"])
+				out_flag_id = int(e2["value"])
 			th.pc = p
+			if sub == 1 and tip_id >= 0:
+				var cur_sname := str(_scripts.get(th.script_slot, {}).get("name", "")).to_upper()
+				if cur_sname == "CLRFLG.SCX":
+					if out_flag_id >= 0:
+						set_flag(out_flag_id, 1 if unlocked_tips.has(tip_id) else 0)
+				else:
+					unlock_tip(tip_id)
+					if out_flag_id >= 0:
+						set_flag(out_flag_id, 1)
 		0x2A:
 			p += 1
 			for _k in range(3):
@@ -1455,6 +1496,8 @@ func import_state(state: Dictionary) -> bool:
 		set_flag(int(fk), 1)
 	for tk in state.get("unlocked_tips", []):
 		unlocked_tips[int(tk)] = true
+	if not unlocked_tips.is_empty():
+		save_unlocked_tips()
 
 	var rs: Variant = state.get("rine_state", {})
 	if rs is Dictionary and not (rs as Dictionary).is_empty():

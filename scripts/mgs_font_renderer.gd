@@ -14,12 +14,13 @@ const FONT_SHADER_PATH := "res://assets/shaders/font_l8.gdshader"
 static var _shared_atlases: Array = [ [null, null], [null, null] ]
 static var _shared_material: ShaderMaterial = null
 
-# 调色板预设（0: 默认正文白, 1: 青绿/Amadeus, 2: 琥珀橙/TIPS, 3: 警示红, 31: 柔和灰银）
+# 调色板预设（0: 默认正文白, 1: 青绿/Amadeus, 2: 琥珀橙/TIPS, 3: 警示红, 5: 未读TIPS高亮金, 31: 柔和灰银）
 const COLOR_PALETTE := {
 	0: Color(0.97, 0.98, 1.0, 1.0),
 	1: Color(0.45, 0.92, 0.88, 1.0),
 	2: Color(1.0, 0.82, 0.38, 1.0),
 	3: Color(1.0, 0.36, 0.36, 1.0),
+	5: Color(1.0, 0.78, 0.30, 1.0),
 	31: Color(0.75, 0.80, 0.88, 1.0),
 }
 

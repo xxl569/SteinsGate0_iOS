@@ -73,7 +73,7 @@ func get_meswin_assets() -> Dictionary:
 			skip_frames.append(get_region("MESWIN.DDS", Rect2i(2472 + c * 150, 750 + r * 150, 150, 150)))
 	for r in range(2):
 		for c in range(10):
-			wait_frames.append(get_region("MESWIN.DDS", Rect2i(1926 + c * 54, 884 + r * 48, 52, 48)))
+			wait_frames.append(get_region("MESWIN.DDS", Rect2i(1924 + c * 54, 910 + r * 54, 52, 52)))
 
 	return {
 		"box": get_region("MESWIN.DDS", Rect2i(0, 888, 1920, 318)),
@@ -94,6 +94,7 @@ func get_meswin_assets() -> Dictionary:
 		"skip_ring_frames": skip_frames,
 		"wait_ring_frames": wait_frames,
 		"quicksave_gear": get_region("MESWIN.DDS", Rect2i(1930, 686, 260, 140)),
+		"tips_banner": get_region("DATA01.DDS", Rect2i(195, 3, 762, 102)),
 	}
 
 
