@@ -267,23 +267,100 @@ def validate_entitlements_dict(ent: dict[str, Any], source_desc: str) -> None:
         )
 
 
-def read_entitlements_with_ldid(ldid_exe: Path, binary_path: Path) -> dict[str, Any]:
-    proc = subprocess.run(
-        [str(ldid_exe), "-e", str(binary_path)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+def _read_entitlements_from_macho_slice(data: bytes, slice_off: int) -> dict[str, Any]:
+    if slice_off + 32 > len(data):
+        return {}
+    magic, _cpu, _sub, _ftype, ncmds, _sz, _flags, _res = struct.unpack_from(
+        "<IiiIIIII", data, slice_off
     )
-    out = proc.stdout.strip()
-    if proc.returncode != 0 or not out:
+    if magic != 0xFEEDFACF:
         return {}
-    try:
-        parsed = plistlib.loads(out.encode("utf-8"))
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    cmd_off = slice_off + 32
+    cs_off = 0
+    cs_size = 0
+    for _ in range(ncmds):
+        if cmd_off + 8 > len(data):
+            break
+        cmd, cmdsize = struct.unpack_from("<II", data, cmd_off)
+        if cmdsize < 8:
+            break
+        if cmd == 0x1D and cmd_off + 16 <= len(data):
+            cs_off, cs_size = struct.unpack_from("<II", data, cmd_off + 8)
+            break
+        cmd_off += cmdsize
+    if cs_off <= 0 or cs_size < 12:
         return {}
+    abs_cs = slice_off + cs_off
+    if abs_cs + 12 > len(data):
+        return {}
+    sb_magic, _sb_len, sb_count = struct.unpack_from(">III", data, abs_cs)
+    if sb_magic != 0xFADE0CC0:
+        return {}
+    for i in range(sb_count):
+        idx_off = abs_cs + 12 + i * 8
+        if idx_off + 8 > len(data):
+            break
+        _btype, boff = struct.unpack_from(">II", data, idx_off)
+        blob_abs = abs_cs + boff
+        if blob_abs + 8 > len(data):
+            continue
+        bmagic, blen = struct.unpack_from(">II", data, blob_abs)
+        if bmagic == 0xFADE7171 and blen > 8 and blob_abs + blen <= len(data):
+            xml_bytes = data[blob_abs + 8 : blob_abs + blen]
+            try:
+                parsed = plistlib.loads(xml_bytes)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+    return {}
+
+
+def read_entitlements_from_macho(binary_path: Path) -> dict[str, Any]:
+    """纯 Python 解析 Mach-O LC_CODE_SIGNATURE 中的嵌入式 Entitlements Plist。"""
+    data = binary_path.read_bytes()
+    if len(data) < 32:
+        return {}
+    be_magic = struct.unpack_from(">I", data, 0)[0]
+    le_magic = struct.unpack_from("<I", data, 0)[0]
+    if le_magic == 0xFEEDFACF:
+        return _read_entitlements_from_macho_slice(data, 0)
+    if be_magic in (0xCAFEBABE, 0xCAFEBABF):
+        is_fat64 = be_magic == 0xCAFEBABF
+        nfat = struct.unpack_from(">I", data, 4)[0]
+        off = 8
+        for _ in range(nfat):
+            if is_fat64:
+                cputype, _sub, slice_off, _ssz, _al, _r = struct.unpack_from(">IIQQII", data, off)
+                off += 32
+            else:
+                cputype, _sub, slice_off, _ssz, _al = struct.unpack_from(">IIIII", data, off)
+                off += 20
+            if cputype == 0x0100000C:
+                ent = _read_entitlements_from_macho_slice(data, slice_off)
+                if ent:
+                    return ent
+    return {}
+
+
+def read_entitlements_with_ldid(ldid_exe: Path | None, binary_path: Path) -> dict[str, Any]:
+    if ldid_exe is not None and ldid_exe.is_file():
+        try:
+            proc = subprocess.run(
+                [str(ldid_exe), "-e", str(binary_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            out = proc.stdout.strip()
+            if proc.returncode == 0 and out:
+                parsed = plistlib.loads(out.encode("utf-8"))
+                if isinstance(parsed, dict):
+                    return parsed
+        except Exception:
+            pass
+    return read_entitlements_from_macho(binary_path)
 
 
 def sign_with_ldid(
@@ -297,14 +374,26 @@ def sign_with_ldid(
         raise ValueError(f"权限文件根节点不是 dict: {entitlements_plist}")
     validate_entitlements_dict(expected_ent, str(entitlements_plist))
 
-    proc = subprocess.run(
-        [str(ldid_exe), f"-S{entitlements_plist}", str(binary_path)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [str(ldid_exe), f"-S{entitlements_plist}", str(binary_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError as exc:
+        macho_info = inspect_macho(binary_path)
+        existing_ent = read_entitlements_from_macho(binary_path)
+        if macho_info.get("has_code_signature") and existing_ent == expected_ent:
+            print(
+                f"[警告] 无法执行 {ldid_exe} ({exc})，但 {binary_path.name} 已包含完全匹配的 TrollStore 签名与权限，继续复用已签名二进制。",
+                file=sys.stderr,
+            )
+            return existing_ent
+        raise
+
     if proc.returncode != 0:
         raise RuntimeError(
             f"ldid 签名失败 (code={proc.returncode}): {proc.stderr or proc.stdout}"
@@ -580,11 +669,11 @@ def verify_ipa(
             macho_info = inspect_macho(tmp_exec)
             if not macho_info.get("valid_arm64"):
                 raise ValueError(f"主可执行文件不是合法 arm64 Mach-O: {macho_info}")
+            if not macho_info.get("has_code_signature"):
+                raise ValueError(f"主可执行文件缺少 LC_CODE_SIGNATURE 签名段: {exec_arc}")
 
-            ent_info: dict[str, Any] = {}
-            if ldid_exe is not None and ldid_exe.is_file():
-                ent_info = read_entitlements_with_ldid(ldid_exe, tmp_exec)
-                validate_entitlements_dict(ent_info, f"IPA({ipa_path.name})")
+            ent_info: dict[str, Any] = read_entitlements_with_ldid(ldid_exe, tmp_exec)
+            validate_entitlements_dict(ent_info, f"IPA({ipa_path.name})")
 
             pck_report: dict[str, Any] | None = None
             if pck_entries:
