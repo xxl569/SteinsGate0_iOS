@@ -1084,7 +1084,8 @@ func switch_screen(target: int, push_history: bool = true) -> void:
 	var names := ["HOME", "電話", "RINE", "設定", "壁纸", "铃声"]
 	_status_label.text = names[clampi(target, 0, names.size() - 1)]
 	if target == PhoneScreen.CHAT:
-		_ensure_best_rine_contact()
+		if _active_contact_idx <= 0:
+			_active_contact_idx = 1
 		_refresh_chat_header()
 		_clear_contact_unread(_active_contact_idx)
 
@@ -1281,14 +1282,14 @@ func _animate_x(target_x: float) -> void:
 
 
 func _on_phone_event(subop: int, args: Array) -> void:
-	# 序章 SG0_PhoneCtrl(5) / SG0_PhoneCtrl(10, 13)+PhoneCtrl(0) / _rndrine L14 PhoneCtrl(10, 4/5)+PhoneCtrl(1)
-	# 均为普通手机状态或 RINE 新消息通知，仅真正的 Amadeus 来电 (subop=20/21, 10:1, 或 arg>=180) 才弹来电界面并响铃
+	# 序章 SG0_PhoneCtrl(5) / SG0_PhoneCtrl(10, 13)+PhoneCtrl(0) / SG0_01_01 PhoneCtrl(10, 230)+PhoneCtrl(5) / _rndrine L14 PhoneCtrl(10, 5)+PhoneCtrl(1)
+	# 均为普通手机状态或 RINE 新消息通知；PhoneCtrl(10, arg) 本身仅记录触发参数而不弹来电，
+	# 仅真正的 Amadeus 来电 (subop=20/21 或 PhoneCtrl(1) 配合 arg==1 / arg>=180 如 macrosys2 L324) 才弹来电界面并响铃
 	var arg0: int = int(args[0]) if args.size() >= 1 else -1
 	var is_real_call: bool = (
 		subop == 20
 		or subop == 21
-		or (subop == 10 and (arg0 == 1 or arg0 >= 180))
-		or (subop == 1 and arg0 >= 180)
+		or (subop == 1 and (arg0 == 1 or arg0 >= 180))
 	)
 	if is_real_call:
 		unlock_amadeus()
@@ -1371,14 +1372,15 @@ func _on_rine_event(subop: int, args: Array) -> void:
 			_active_contact_idx = 1
 			_refresh_chat_header()
 		unlock_contact(_active_contact_idx)
+		var sender_cid := side_or_cid if (not is_self and side_or_cid > 0 and _has_contact(side_or_cid)) else _active_contact_idx
+		var av_idx := _self_contact_id if is_self else _get_contact_avatar_idx(sender_cid)
 		var appended := false
 		if msg_type == 1:
 			if payload_id >= 0 and payload_id < _stickers.size():
-				_append_sticker_msg(payload_id, is_self)
+				_append_sticker_msg(payload_id, is_self, true, av_idx)
 				appended = true
 		else:
 			if payload_id >= 0 and payload_id < _phone_offsets.size():
-				var av_idx := _self_contact_id if is_self else _get_contact_avatar_idx(_active_contact_idx)
 				_append_sc3_msg(av_idx, payload_id, is_self)
 				appended = true
 		if appended and not is_self:
@@ -1472,13 +1474,13 @@ func _append_text_msg(avatar_idx: int, txt: String, is_self: bool, record: bool 
 	_scroll_chat_to_bottom()
 
 
-func _append_sticker_msg(sticker_idx: int, is_self: bool = true, record: bool = true) -> void:
+func _append_sticker_msg(sticker_idx: int, is_self: bool = true, record: bool = true, custom_avatar_idx: int = -1) -> void:
 	if sticker_idx < 0 or sticker_idx >= _stickers.size():
 		return
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	row.alignment = BoxContainer.ALIGNMENT_END if is_self else BoxContainer.ALIGNMENT_BEGIN
-	var av_idx := _get_contact_avatar_idx(_active_contact_idx)
+	var av_idx := custom_avatar_idx if custom_avatar_idx >= 0 else _get_contact_avatar_idx(_active_contact_idx)
 	if not is_self:
 		if av_idx >= 0 and av_idx < _avatars.size() and _avatars[av_idx] != null:
 			var av := TextureRect.new()

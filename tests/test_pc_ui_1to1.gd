@@ -439,7 +439,8 @@ func _run() -> void:
 	var btn_amadeus_conn := amadeus_btns[0] as Button
 	var btn_amadeus_cancel := amadeus_btns[1] as Button
 	main_node.vm.set_flag(0x4B6, 1)
-	pd_chk._on_phone_event(10, [1])
+	pd_chk._on_phone_event(10, [185])
+	pd_chk._on_phone_event(1, [185])
 	_check(pd_chk._amadeus_overlay.visible, "Amadeus 来电遮罩应显示")
 	_check(main_node.audio.is_se_playing("SGSE700.ogg"), "Amadeus 来电应播放循环铃声 SGSE700.ogg")
 	btn_amadeus_conn.pressed.emit()
@@ -447,7 +448,8 @@ func _run() -> void:
 		"点击接听按钮后遮罩应关闭且必须彻底停止铃声")
 	_check(main_node.vm.get_flag(0x4B6) == 0 and main_node.vm.get_flag(0x505) == 1,
 		"接听 Amadeus 来电应清除 Flag(0x4B6) 并置位 Flag(0x505)=1")
-	pd_chk._on_phone_event(10, [1])
+	pd_chk._on_phone_event(10, [185])
+	pd_chk._on_phone_event(1, [185])
 	_check(main_node.audio.is_se_playing("SGSE700.ogg"), "再次来电应重新播放铃声")
 	btn_amadeus_cancel.pressed.emit()
 	_check(not pd_chk._amadeus_overlay.visible and not main_node.audio.is_se_playing("SGSE700.ogg"),
@@ -508,11 +510,28 @@ func _run() -> void:
 	_check(pd_chk._msg_list.get_child_count() >= 1,
 		"刚点进 RINE 短信功能（未点击回复前）应立即显示初始开场消息，实际子项=%d" % pd_chk._msg_list.get_child_count())
 
-	# 回归测试4a：RINE 收信后的 PhoneCtrl(10, 5) + PhoneCtrl(1) 不得误弹 Amadeus 来电
+	# 回归测试4a：RINE 收信后的 PhoneCtrl(10, 5) + PhoneCtrl(1) 及主线 PhoneCtrl(10, 230) + PhoneCtrl(5) 绝不得误弹 Amadeus 来电或误停快进
 	pd_chk._on_phone_event(10, [5])
 	pd_chk._on_phone_event(1, [5])
 	_check(not pd_chk._amadeus_overlay.visible,
 		"RINE 收信通知 PhoneCtrl(10,5)+PhoneCtrl(1) 绝不可误触发 Amadeus 来电界面")
+	main_node._skip_mode = true
+	main_node._on_vm_trigger_event(10, [230])
+	pd_chk._on_phone_event(10, [230])
+	pd_chk._on_phone_event(5, [230])
+	_check(not pd_chk._amadeus_overlay.visible and main_node._skip_mode,
+		"主线 PhoneCtrl(10, 230) + PhoneCtrl(5) 绝不可误弹 Amadeus 来电或打断快进")
+	main_node._skip_mode = false
+
+	# 回归测试4b：从通讯录选定联系人或打开 Amadeus App 切入 CHAT 时，即使真由理(1)有未读消息也不得覆盖用户选择
+	pd_chk._unread_by_contact[1] = 1
+	pd_chk._open_amadeus_app()
+	_check(pd_chk._active_contact_idx == 3 and pd_chk._chat_title_label.text == "RINE · 红莉栖 (Amadeus)",
+		"打开 Amadeus App 后应保持联系人 3(红莉栖)，不可被真由理未读覆盖")
+	pd_chk._on_contact_pressed(7, "铃羽")
+	pd_chk.switch_screen(UiPhoneRine.PhoneScreen.CHAT, false)
+	_check(pd_chk._active_contact_idx == 7 and pd_chk._chat_title_label.text == "RINE · 铃羽",
+		"在通讯录选中铃羽(7)再切换到 CHAT 时应保持铃羽，不可被真由理未读覆盖")
 
 	# 回归测试4b：sub=12(0,1) 贴纸回复模式 + _rndrine.scx L64->L65 完整推进
 	pd_chk.reset_phone_state()
