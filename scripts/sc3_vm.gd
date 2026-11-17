@@ -82,6 +82,7 @@ var _vfs: MgsVfs = null
 var _scripts: Dictionary = {} # slot_id(int) -> { name, index, data, labels, str_offsets, ret_addrs }
 var _threads: Array[ThreadCtx] = []
 var _next_thread_id: int = 1
+var _in_chara_swap: bool = false
 var _active_slot: int = 0
 
 var scr_work: Dictionary = {} # int -> int
@@ -335,7 +336,11 @@ func set_flag(idx: int, val: int) -> void:
 		flags.erase(idx)
 	else:
 		flags[idx] = true
-	if idx == 2699 or idx == 2743 or idx == 2740:
+	if idx >= 2410 and idx <= 2417 and was_set and val == 0 and not _in_chara_swap:
+		# 立绘槽位注销（macrosys L36/L42 宏全角色清理或指令释放）：按槽位位掩码发射释放信号
+		var slot_mask := 1 << (idx - 2410)
+		chara_released.emit(slot_mask)
+	elif idx == 2699 or idx == 2743 or idx == 2740:
 		var call_active := is_incoming_call_active()
 		if call_active and not _incoming_call_notified:
 			_incoming_call_notified = true
@@ -1259,8 +1264,10 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			if d_idx >= 0 and s_idx >= 0 and d_idx != s_idx:
 				var fd := get_flag(2410 + d_idx)
 				var fs := get_flag(2410 + s_idx)
+				_in_chara_swap = true
 				set_flag(2410 + d_idx, fs)
 				set_flag(2410 + s_idx, fd)
+				_in_chara_swap = false
 				_swap_scr_work_range(5100 + 40 * d_idx, 5100 + 40 * s_idx, 40)
 				_swap_scr_work_range(3450 + d_idx, 3450 + s_idx, 1)
 			chara_swapped.emit(dst_m, src_m)

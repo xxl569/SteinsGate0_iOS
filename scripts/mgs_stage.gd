@@ -884,10 +884,13 @@ func _relayout_chara_slots() -> void:
 		if _vm != null:
 			var sidx := _slot_to_scr_idx(slot_id)
 			var ch_idx := _vm.get_scr_work(5100 + 40 * sidx + 9)
+			var flag_active := _vm.get_flag(2410 + sidx) != 0
+			if ch_idx < 0 or ch_idx == 65535 or not flag_active:
+				# 变量驱动的槽位失效：原版引擎中对应槽位已注销，平滑淡出释放节点防止穿模残留
+				release_chara(slot_id)
+				continue
 			var sx := _vm.get_scr_work(5100 + 40 * sidx + 0) + _vm.get_scr_work(2500 + 10 * sidx + 0)
 			var sy := _vm.get_scr_work(5100 + 40 * sidx + 1) + _vm.get_scr_work(2500 + 10 * sidx + 1)
-			if ch_idx < 0 or ch_idx == 65535:
-				continue
 			if sx != 0 or sy != 0:
 				target_pos = Vector2(float(sx) * 1.5, float(sy) * 1.5)
 				used_scr = true
