@@ -333,6 +333,8 @@ func _sync_modal_block() -> void:
 	if blocked and panels != null:
 		panels.hide_tips_toast()
 	gesture_helper.set_modal_blocked(blocked)
+	if phone_drawer != null:
+		phone_drawer.set_modal_blocked(blocked)
 
 
 func start_new_game() -> void:

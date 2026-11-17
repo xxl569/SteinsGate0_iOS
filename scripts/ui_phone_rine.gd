@@ -89,7 +89,7 @@ var _top_status_date: Label = null
 var _chat_title_label: Label = null
 var _connect_bar: HBoxContainer = null
 var _rine_header_bg: TextureRect = null
-var _rine_input_bg: TextureRect = null
+var _rine_input_bg: Panel = null
 var _rine_emoji_tex: TextureRect = null
 var _rine_send_tex: TextureRect = null
 
@@ -111,6 +111,7 @@ var _current_screen: int = PhoneScreen.HOME
 var _screen_history: Array[int] = []
 var _active_contact_idx: int = 1
 var _is_open: bool = false
+var _modal_blocked: bool = false
 var _sticker_tray_visible: bool = false
 var _tween: Tween = null
 
@@ -145,19 +146,26 @@ func _ready() -> void:
 	_ensure_ui()
 
 
+func set_modal_blocked(blocked: bool) -> void:
+	_modal_blocked = blocked
+
+
 func _input(event: InputEvent) -> void:
-	if not visible or not _is_open or _current_screen != PhoneScreen.CHAT:
+	if not visible or not _is_open or _modal_blocked or _current_screen != PhoneScreen.CHAT:
 		return
 	if _amadeus_overlay != null and _amadeus_overlay.visible:
 		return
-	if _reply_mode == 0 and _reply_options.size() > 1 and event is InputEventKey:
+	if _reply_mode == 0 and not _reply_options.is_empty() and event is InputEventKey:
 		var ke := event as InputEventKey
 		if ke.pressed and not ke.echo:
-			if ke.keycode == KEY_LEFT:
+			if ke.keycode == KEY_LEFT and _reply_options.size() > 1:
 				_cycle_reply_option(-1)
 				get_viewport().set_input_as_handled()
-			elif ke.keycode == KEY_RIGHT:
+			elif ke.keycode == KEY_RIGHT and _reply_options.size() > 1:
 				_cycle_reply_option(1)
+				get_viewport().set_input_as_handled()
+			elif ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER:
+				_send_selected_text_reply()
 				get_viewport().set_input_as_handled()
 
 
@@ -516,12 +524,12 @@ func _build_chat_screen() -> void:
 	_rine_emoji_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	input_bar.add_child(_rine_emoji_tex)
 
-	_rine_input_bg = TextureRect.new()
+	_rine_input_bg = Panel.new()
+	_rine_input_bg.name = "RineInputBg"
 	_rine_input_bg.position = Vector2(56, 8)
 	_rine_input_bg.size = Vector2(342, 52)
-	_rine_input_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_rine_input_bg.stretch_mode = TextureRect.STRETCH_SCALE
 	_rine_input_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_rine_input_bg.add_theme_stylebox_override("panel", _make_flat_box(Color(0.92, 0.94, 0.96, 1.0), Color(0.73, 0.77, 0.83, 1.0), 8))
 	input_bar.add_child(_rine_input_bg)
 
 	_rine_send_tex = TextureRect.new()
@@ -567,12 +575,13 @@ func _build_chat_screen() -> void:
 	input_bar.add_child(_input_preview_clip)
 
 	_input_preview_fr = MgsFontRenderer.new()
-	_input_preview_fr.position = Vector2(2, 4)
-	_input_preview_fr.base_scale = 0.36
-	_input_preview_fr.line_height = 20.0
+	_input_preview_fr.position = Vector2(2, 12)
+	_input_preview_fr.base_scale = 0.46
+	_input_preview_fr.line_height = 22.0
 	_input_preview_fr.max_line_width = 256.0
 	_input_preview_fr.default_color = Color(0.08, 0.14, 0.22, 1.0)
 	_input_preview_fr.shadow_offset = Vector2.ZERO
+	_input_preview_fr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_input_preview_clip.add_child(_input_preview_fr)
 
 	_quick_reply_btn = Button.new()
@@ -633,6 +642,7 @@ func _build_chat_screen() -> void:
 
 	var st_scroll := ScrollContainer.new()
 	st_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	st_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_sticker_panel.add_child(st_scroll)
 
 	var st_center := CenterContainer.new()
@@ -656,6 +666,7 @@ func _build_chat_screen() -> void:
 
 	var rp_scroll := ScrollContainer.new()
 	rp_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rp_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_reply_panel.add_child(rp_scroll)
 
 	_reply_list = VBoxContainer.new()
@@ -860,7 +871,7 @@ func _build_bottom_nav_bar() -> void:
 	var third_w := SCREEN_W / 3.0
 	var defs := [
 		{"name": "NavHome", "x": 0.0, "cb": func(): switch_screen(PhoneScreen.HOME)},
-		{"name": "NavRine", "x": third_w, "cb": func(): switch_screen(PhoneScreen.CHAT)},
+		{"name": "NavRine", "x": third_w, "cb": func(): _open_rine_app()},
 		{"name": "NavBack", "x": third_w * 2.0, "cb": func(): _go_back()},
 	]
 	for d in defs:
@@ -935,9 +946,6 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader, audio: MgsAudioMgr = n
 		var rine_hdr: Texture2D = _phone_assets.get("rine_header_bar", null)
 		if rine_hdr != null and _rine_header_bg != null:
 			_rine_header_bg.texture = rine_hdr
-		var rine_bar: Texture2D = _phone_assets.get("rine_input_bar", null)
-		if rine_bar != null and _rine_input_bg != null:
-			_rine_input_bg.texture = rine_bar
 		var rine_em: Texture2D = _phone_assets.get("rine_emoji", null)
 		if rine_em != null and _rine_emoji_tex != null:
 			_rine_emoji_tex.texture = rine_em
@@ -1097,14 +1105,24 @@ func _populate_sticker_tray() -> void:
 		if tex == null:
 			continue
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(130, 126) if is_mode1_pick else Vector2(76, 66)
-		btn.icon = tex
-		btn.expand_icon = true
-		btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		btn.custom_minimum_size = Vector2(132, 120) if is_mode1_pick else Vector2(76, 66)
+		btn.text = ""
 		btn.focus_mode = Control.FOCUS_NONE
 		if is_mode1_pick:
 			btn.add_theme_stylebox_override("normal", _make_flat_box(Color(0.16, 0.24, 0.36, 0.92), Color(0.45, 0.72, 0.98, 0.9), 8))
 			btn.add_theme_stylebox_override("hover", _make_flat_box(Color(0.24, 0.42, 0.68, 0.96), Color(0.75, 0.90, 1.0, 1.0), 8))
+		# 使用内置 TextureRect 按 202:174 原图比例居中显示，避免 Button.icon 在方形槽位中被横向挤压
+		var icon_tr := TextureRect.new()
+		icon_tr.texture = tex
+		icon_tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		icon_tr.offset_left = 6
+		icon_tr.offset_top = 6
+		icon_tr.offset_right = -6
+		icon_tr.offset_bottom = -6
+		icon_tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon_tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon_tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(icon_tr)
 		var chosen_idx := sidx
 		btn.pressed.connect(func():
 			var self_av := _get_contact_avatar_idx(_self_contact_id)
@@ -1341,7 +1359,7 @@ func _refresh_reply_prompt() -> void:
 			_rine_input_bg.size = Vector2(342, 52)
 		_quick_reply_btn.position = Vector2(68, 14)
 		_quick_reply_btn.size = Vector2(318, 40)
-		_quick_reply_btn.text = "请选择下方表情贴纸回复 (%d)..." % _reply_options.size()
+		_quick_reply_btn.text = "请选择上方表情贴纸回复 (%d)..." % _reply_options.size()
 		_quick_reply_btn.disabled = false
 		if _btn_toggle_st != null:
 			_btn_toggle_st.disabled = false
@@ -1383,7 +1401,7 @@ func _refresh_reply_prompt() -> void:
 			if not _phone_bytes.is_empty() and cur_opt_id >= 0 and cur_opt_id < _phone_offsets.size():
 				_input_preview_fr.set_sc3_string(_phone_bytes, int(_phone_offsets[cur_opt_id]), _vm, null, true)
 				var ch := _input_preview_fr.get_content_size().y
-				_input_preview_fr.position = Vector2(2.0, 12.0 if ch <= 22.0 else 4.0)
+				_input_preview_fr.position = Vector2(2.0, 12.0 if ch <= 24.0 else 2.0)
 			else:
 				_quick_reply_btn.text = "点击选择回复 (%d/%d)" % [_reply_selected_idx + 1, _reply_options.size()]
 				if _input_preview_clip != null:
@@ -1478,7 +1496,8 @@ func _rebuild_reply_list() -> void:
 			continue
 		var is_cur := (idx == _reply_selected_idx)
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(SCREEN_W - 28, 48)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.custom_minimum_size = Vector2(0, 48)
 		btn.focus_mode = Control.FOCUS_NONE
 		var norm_bg := Color(0.76, 0.90, 1.0, 1.0) if is_cur else Color(0.88, 0.94, 0.99, 1.0)
 		var norm_bd := Color(0.14, 0.48, 0.88, 1.0) if is_cur else Color(0.32, 0.62, 0.92, 0.9)
@@ -1493,13 +1512,14 @@ func _rebuild_reply_list() -> void:
 		fr.position = Vector2(10, 6)
 		fr.base_scale = 0.50
 		fr.line_height = 26.0
-		fr.max_line_width = SCREEN_W - 48.0
+		fr.max_line_width = SCREEN_W - 64.0
 		fr.default_color = Color(0.08, 0.14, 0.22, 1.0)
 		fr.shadow_offset = Vector2.ZERO
+		fr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		holder.add_child(fr)
 		fr.set_sc3_string(_phone_bytes, int(_phone_offsets[opt_id]), _vm, null, true)
 		var h_est := maxf(46.0, fr.get_content_size().y + 14.0)
-		btn.custom_minimum_size = Vector2(SCREEN_W - 28, h_est)
+		btn.custom_minimum_size = Vector2(0, h_est)
 		var chosen_opt := opt_id
 		btn.pressed.connect(func():
 			_send_text_reply_option(chosen_opt)
@@ -1661,8 +1681,8 @@ func _on_rine_event(subop: int, args: Array) -> void:
 			_active_contact_idx = 1
 			_refresh_chat_header()
 		unlock_contact(_active_contact_idx)
-		var sender_cid := side_or_cid if (not is_self and side_or_cid > 0 and _has_contact(side_or_cid)) else _active_contact_idx
-		var av_idx := _self_contact_id if is_self else _get_contact_avatar_idx(sender_cid)
+		var sender_cid := side_or_cid if (not is_self and side_or_cid >= 0 and _has_contact(side_or_cid)) else _active_contact_idx
+		var av_idx := _get_contact_avatar_idx(_self_contact_id) if is_self else _get_contact_avatar_idx(sender_cid)
 		var appended := false
 		if msg_type == 1:
 			if payload_id >= 0 and payload_id < _stickers.size():
@@ -1817,7 +1837,7 @@ func _rebuild_chat_for_active_contact() -> void:
 		elif t == "text":
 			_append_text_msg(av, str(d.get("text", "")), is_self, false)
 		elif t == "sticker":
-			_append_sticker_msg(int(d.get("idx", -1)), is_self, false)
+			_append_sticker_msg(int(d.get("idx", -1)), is_self, false, av)
 
 
 func reset_phone_state() -> void:

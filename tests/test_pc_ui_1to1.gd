@@ -725,7 +725,48 @@ func _run() -> void:
 	stk_btn_1.pressed.emit()
 	_check(pd_chk._reply_options.is_empty() and not pd_chk._sticker_panel.visible and main_node.vm.get_flag(2614) == 0,
 		"点击候选贴纸后应发送贴纸、收起托盘并清除 Flag(2614)")
-	print("[14/14] PC 1:1 RINE text reply (< > cycle + send), Mode-1 3-sticker picker & idle lockout ok")
+
+	# 14c: 键盘左右/回车操作、模态屏蔽保护、NavRine 自动聚焦未读、非0视角头像映射与贴纸重建保留头像
+	pd_chk.reset_phone_state()
+	main_node.vm.reset_vm()
+	main_node.vm.load_script_into_slot(11, "_rndrine.scx")
+	main_node.vm._handle_rine_ctrl(50, [9])
+	main_node.vm._handle_rine_ctrl(43, [1])
+	main_node.vm._handle_rine_ctrl(46, [1, 0, main_node.vm.get_scr_work(6655)])
+	main_node.vm._handle_rine_ctrl(10, [24])
+	pd_chk.open_phone()
+	pd_chk.switch_screen(UiPhoneRine.PhoneScreen.HOME, false)
+	var nav_rine_btn := pd_chk._screen_root.find_child("NavRine", true, false) as Button
+	_check(nav_rine_btn != null, "底部硬件导航栏 NavRine 按钮应存在")
+	nav_rine_btn.pressed.emit()
+	_check(pd_chk._current_screen == UiPhoneRine.PhoneScreen.CHAT and pd_chk._active_contact_idx == 1,
+		"点击 NavRine 应自动定位到有未读消息的联系人(1)")
+	var ke_right := InputEventKey.new(); ke_right.keycode = KEY_RIGHT; ke_right.pressed = true
+	pd_chk._input(ke_right)
+	_check(pd_chk._reply_selected_idx == 1, "Mode 0 按 KEY_RIGHT 应切换到索引 1")
+	pd_chk.set_modal_blocked(true)
+	pd_chk._input(ke_right)
+	_check(pd_chk._reply_selected_idx == 1, "外部模态打开时 KEY_RIGHT 不得穿透切换 RINE 选项")
+	pd_chk.set_modal_blocked(false)
+	var ke_enter := InputEventKey.new(); ke_enter.keycode = KEY_ENTER; ke_enter.pressed = true
+	pd_chk._input(ke_enter)
+	_check(pd_chk._reply_options.is_empty() and main_node.vm.get_flag(2614) == 0,
+		"Mode 0 按 KEY_ENTER 应直接发送当前选中文本并推进分支")
+
+	# 非0视角头像映射 (id=10 阿万音由季 -> avatar=9) 与贴纸重建头像保留
+	pd_chk.reset_phone_state()
+	pd_chk._on_rine_event(42, [10])
+	pd_chk._on_rine_event(43, [7])
+	pd_chk._on_rine_event(15, [10, 0, 1])
+	pd_chk._on_rine_event(15, [7, 1, 2])
+	var yuki_msgs: Array = pd_chk._messages_by_contact.get(7, [])
+	_check(yuki_msgs.size() == 2, "铃羽(7)会话应记录 2 条消息，实际=%d" % yuki_msgs.size())
+	_check(int((yuki_msgs[0] as Dictionary).get("avatar_idx", -1)) == 9,
+		"己方视角设为 10(由季) 时头像索引应映射为 9")
+	_check(int((yuki_msgs[1] as Dictionary).get("avatar_idx", -1)) == 7,
+		"收到铃羽(7)贴纸应记录其发送者头像 7")
+	pd_chk._rebuild_chat_for_active_contact()
+	print("[14/14] PC 1:1 RINE text reply (< > cycle + send), Mode-1 3-sticker picker, keyboard/modal guard & idle lockout ok")
 
 	main_node.queue_free()
 	if _failed:
