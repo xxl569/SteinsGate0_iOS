@@ -109,6 +109,7 @@ var _rine_reply_options: Array[Dictionary] = [] # [{ "str_id": int, "label_id": 
 var _rine_history_count: int = 0
 var _rine_trigger_label: int = -1
 var _last_phone_ctrl_arg: int = -1 # 记录最近一次 PhoneCtrl(10, arg) 参数以区分 RINE 通知与真正来电
+var _incoming_call_notified: bool = false # 防止同一来电窗口内重复触发来电弹窗与铃声
 
 const READ_LINES_PATH := "user://read_lines.json"
 const UNLOCKED_TIPS_PATH := "user://unlocked_tips.json"
@@ -324,18 +325,34 @@ func get_flag(idx: int) -> int:
 	return 1 if bool(flags.get(idx, false)) else 0
 
 
+func is_incoming_call_active() -> bool:
+	return get_flag(2620) == 0 and get_flag(2699) != 0 and (get_flag(2743) != 0 or get_flag(2740) != 0)
+
+
 func set_flag(idx: int, val: int) -> void:
 	var was_set := get_flag(idx) != 0
 	if val == 0:
 		flags.erase(idx)
 	else:
 		flags[idx] = true
-	# 当 macrosys2 L[325] / L[429] 清除来电响铃标志 Flag(2699) (1 -> 0) 时，同步关闭来电弹窗与铃声
-	if idx == 2699 and was_set and val == 0:
-		set_flag(0x4B6, 0)
-		if get_flag(2620) == 0:
-			set_flag(0x505, 0)
-		phone_event.emit(3, [])
+	if idx == 2699 or idx == 2743 or idx == 2740:
+		var call_active := is_incoming_call_active()
+		if call_active and not _incoming_call_notified:
+			_incoming_call_notified = true
+			phone_event.emit(20, [1 if get_flag(2743) != 0 else 0, get_scr_work(6613)])
+		elif not call_active and _incoming_call_notified:
+			_incoming_call_notified = false
+			if idx == 2699 and was_set and val == 0:
+				set_flag(0x4B6, 0)
+				if get_flag(2620) == 0:
+					set_flag(0x505, 0)
+			phone_event.emit(3, [])
+	elif idx == 2750 and not was_set and val != 0 and get_flag(2613) == 0:
+		# 主动呼叫 Amadeus 触发窗口 (macrosys2 L[320])：通知手机解锁 Amadeus 图标（绝不弹来电遮罩）
+		phone_event.emit(23, [2750])
+	elif idx == 2748 and not was_set and val != 0:
+		# 主动触发 RINE 分支窗口：仅通知主控停止快进等（绝不弹来电遮罩）
+		phone_event.emit(23, [2748])
 
 
 static func _mask_to_index(mask: int) -> int:
@@ -1323,7 +1340,9 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				set_flag(0x4B6, 1)
 			elif sub == 0 or sub == 1 or sub == 5:
 				set_flag(0x505, 1)
-				args.append(_last_phone_ctrl_arg)
+				# PhoneCtrl(1) 在 macrosys2 L[323] 中仅为手机触发点存档准备，实际来电/去电分支由 Flag(2699/2743/2740/2750/2748) 决定
+				if sub != 1:
+					args.append(_last_phone_ctrl_arg)
 			elif sub == 3:
 				set_flag(0x505, 0)
 			th.pc = p
@@ -1516,7 +1535,8 @@ func import_state(state: Dictionary) -> bool:
 	for k in sw.keys():
 		set_scr_work(int(k), int(sw[k]))
 	for fk in state.get("flags", []):
-		set_flag(int(fk), 1)
+		flags[int(fk)] = true
+	_incoming_call_notified = is_incoming_call_active()
 	for tk in state.get("unlocked_tips", []):
 		unlocked_tips[int(tk)] = true
 	if not unlocked_tips.is_empty():
@@ -1583,6 +1603,7 @@ func _reset_rine_subinterp() -> void:
 	_rine_history_count = 0
 	_rine_trigger_label = -1
 	_last_phone_ctrl_arg = -1
+	_incoming_call_notified = false
 
 
 func get_rine_state() -> Dictionary:
@@ -1880,15 +1901,15 @@ func submit_rine_sticker(sticker_idx: int) -> bool:
 	return false
 
 
-## 玩家在 Amadeus 来电界面点击接听(true)或挂断(false)，写回 SG0_PhoneCtrl 状态标志
+## 玩家在 Amadeus/来电/触发界面点击接听(true)或挂断(false)，写回 SG0_PhoneCtrl 状态标志
 func submit_amadeus_action(accepted: bool) -> void:
 	set_flag(0x4B6, 0) # 清除来电等待标志
 	if accepted:
+		_incoming_call_notified = false
 		set_flag(0x505, 1) # 通话连接标志置位
 		set_flag(2620, 1) # 0xA3C: 对齐 Game.exe 0x44e280，置位已接听标志以命中 JumpIfFlag(1, 2620, ...)
 		set_flag(2604, 1) # 0xA2C
 		set_flag(2606, 1) # 0xA2E: 对齐 Game.exe 0x457d83，触发 MesMain 自动推进
-		set_scr_work(6656, 1)
 		phone_event.emit(0, [])
 		if is_waiting_for_click():
 			notify_user_advance()

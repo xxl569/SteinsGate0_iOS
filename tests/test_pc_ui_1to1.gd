@@ -864,6 +864,108 @@ func _run() -> void:
 		"忽略来电结束响铃后应同步隐藏来电遮罩、清除未接状态并停止铃声")
 	print("[15/15] SG0_01_01 Amadeus call (no line-skip, save/load restore, Amadeus icon reopen, CONNECT->L6 & ignore->578) ok")
 
+	# ---------------------------------------------------------
+	# 16. 回归测试7：来电挂断后重开手机不回桌面、普通电话区分来电人、主动呼出 Amadeus/RINE 不误弹来电、独立铃声通道
+	# ---------------------------------------------------------
+	# 16a: 在 str_id=577 来电期间点挂断后直接再次 open_phone()，仍应直接显示来电接听界面而非桌面
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.audio.stop_se(-1)
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_01_01.scx", 5)
+	for _ci in range(6):
+		for _st in range(300):
+			main_node.vm.step_frame(1)
+			if main_node.vm.is_waiting_for_click():
+				break
+		if int((main_node.vm.backlog.back() as Dictionary).get("str_id", -1)) == 577:
+			break
+		main_node.vm.notify_user_advance()
+	pd_chk.open_phone()
+	btn_amadeus_cancel.pressed.emit()
+	_check(pd_chk._has_unread_call and main_node.gesture_helper.is_phone_unread(),
+		"在 577 来电窗内挂断收起手机后，11/29 未读角标应保留以便重新接听")
+	pd_chk.open_phone()
+	_check(pd_chk._amadeus_overlay.visible,
+		"挂断后仍在来电窗内直接重开手机，应直接显示来电界面而非回到普通桌面")
+	# 独立铃声通道：连续播放 10 个 SE + stop_se(2) 均不可覆盖或停掉 SGSE700.ogg
+	for _se_i in range(10):
+		main_node.audio.play_se(0, false)
+	main_node.audio.stop_se(2)
+	_check(main_node.audio.is_se_playing("SGSE700.ogg"),
+		"独立铃声通道在连续播放 10 次 SE 与 AudioReset(2) 后仍应保持 SGSE700.ogg 响铃")
+	main_node.audio.stop_se(-1)
+
+	# 16b: SG0_01_08 L2 主动呼叫 Amadeus (Flag(2750)=1, Flag(2699)=0) 绝不得误弹来电遮罩或响铃，点 Amadeus 图标应触发 L4
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_01_08.scx", 2)
+	for _st in range(300):
+		main_node.vm.step_frame(1)
+		if main_node.vm.is_waiting_for_click():
+			break
+	_check(main_node.vm.get_flag(2750) == 1 and main_node.vm.get_flag(2699) == 0,
+		"SG0_01_08 L2 应进入主动呼出 Amadeus 窗口 (2750=1, 2699=0)")
+	_check(not pd_chk._amadeus_overlay.visible and not main_node.audio.is_se_playing("SGSE700.ogg"),
+		"主动呼出 Amadeus 触发期绝不可误弹来电遮罩或响铃")
+	pd_chk.open_phone()
+	_check(not pd_chk._amadeus_overlay.visible and pd_chk._amadeus_btn.visible,
+		"主动呼出期打开手机应停留在桌面并显示已解锁的 Amadeus 图标")
+	pd_chk._open_amadeus_app()
+	_check(main_node.vm.get_flag(2620) == 1 and not pd_chk.is_phone_open(),
+		"主动呼出期点击 Amadeus 图标应置位 Flag(2620)=1 并收起手机")
+
+	# 16c: SG0_A01_06 普通来电 (Flag(2740)=1, ScrWork[6613]=2 桶子) 不得解锁 Amadeus，应显示来电人桶子且接听可推进
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.audio.stop_se(-1)
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_A01_06.scx", 2)
+	for _ci in range(80):
+		for _st in range(300):
+			main_node.vm.step_frame(1)
+			if main_node.vm.is_waiting_for_click():
+				break
+		if main_node.vm.get_flag(2740) != 0:
+			break
+		main_node.vm.notify_user_advance()
+	_check(main_node.vm.get_flag(2740) == 1 and main_node.vm.get_scr_work(6613) == 2,
+		"SG0_A01_06 应进入桶子普通来电态 (2740=1, sw6613=2)")
+	_check(not pd_chk._amadeus_unlocked and pd_chk._amadeus_overlay.visible,
+		"普通联系人来电不得提前解锁 Amadeus，且应显示来电遮罩")
+	_check(pd_chk._call_title_lbl.text.contains("桶子") and not pd_chk._amadeus_logo.visible and pd_chk._call_avatar_rect.visible,
+		"普通来电界面应显示桶子头像与名称而非 Amadeus 标志，实际=%s" % pd_chk._call_title_lbl.text)
+	btn_amadeus_conn.pressed.emit()
+	_check(main_node.vm.get_flag(2620) == 1, "普通来电点击接听应置位 Flag(2620)=1")
+	main_node.audio.stop_se(-1)
+
+	# 16d: SG0_A02_01 L6 主动触发 RINE 分支 (Flag(2748)=1, Flag(2699)=0) 不误弹来电，点击 RINE 图标应触发推进
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_A02_01.scx", 6)
+	for _st in range(300):
+		main_node.vm.step_frame(1)
+		if main_node.vm.is_waiting_for_click():
+			break
+	_check(main_node.vm.get_flag(2748) == 1 and not pd_chk._amadeus_overlay.visible,
+		"SG0_A02_01 L6 主动触发 RINE (2748=1) 绝不得误弹来电遮罩")
+	pd_chk.open_phone()
+	pd_chk._open_rine_app()
+	_check(main_node.vm.get_flag(2620) == 1 and not pd_chk.is_phone_open(),
+		"Flag(2748)=1 时点击 RINE 图标应置位 Flag(2620)=1 并收起手机推进分支")
+
+	print("[16/16] Call reopen-after-cancel, dedicated ringtone channel, normal caller UI, outgoing Amadeus(2750) & RINE(2748) ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)

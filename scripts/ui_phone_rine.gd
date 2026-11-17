@@ -68,6 +68,8 @@ var _hw_nav_tex: TextureRect = null
 var _home_wallpaper: TextureRect = null
 var _amadeus_overlay: ColorRect = null
 var _amadeus_logo: TextureRect = null
+var _call_avatar_rect: TextureRect = null
+var _call_title_lbl: Label = null
 var _msg_list: VBoxContainer = null
 var _msg_scroll: ScrollContainer = null
 var _sticker_panel: PanelContainer = null
@@ -278,14 +280,24 @@ func _ensure_ui() -> void:
 	_amadeus_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_amadeus_overlay.add_child(_amadeus_logo)
 
-	var call_lbl := Label.new()
-	call_lbl.text = "Amadeus · 牧濑 红莉栖\n来电中..."
-	call_lbl.position = Vector2(20.0, 275.0)
-	call_lbl.size = Vector2(SCREEN_W - 40.0, 56.0)
-	call_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	call_lbl.add_theme_font_size_override("font_size", 19)
-	call_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55, 1.0))
-	_amadeus_overlay.add_child(call_lbl)
+	_call_avatar_rect = TextureRect.new()
+	_call_avatar_rect.name = "IncomingCallerAvatar"
+	_call_avatar_rect.position = Vector2((SCREEN_W - 140.0) * 0.5, 110.0)
+	_call_avatar_rect.size = Vector2(140, 140)
+	_call_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_call_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_call_avatar_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_call_avatar_rect.visible = false
+	_amadeus_overlay.add_child(_call_avatar_rect)
+
+	_call_title_lbl = Label.new()
+	_call_title_lbl.text = "Amadeus · 牧濑 红莉栖\n来电中..."
+	_call_title_lbl.position = Vector2(20.0, 275.0)
+	_call_title_lbl.size = Vector2(SCREEN_W - 40.0, 56.0)
+	_call_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_call_title_lbl.add_theme_font_size_override("font_size", 19)
+	_call_title_lbl.add_theme_color_override("font_color", Color(0.95, 0.85, 0.55, 1.0))
+	_amadeus_overlay.add_child(_call_title_lbl)
 
 	_connect_bar = HBoxContainer.new()
 	_connect_bar.position = Vector2((SCREEN_W - 400.0) * 0.5, 355.0)
@@ -310,7 +322,8 @@ func _ensure_ui() -> void:
 	btn_cancel.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(true))
 	btn_cancel.pressed.connect(func():
 		_amadeus_overlay.visible = false
-		_has_unread_call = false
+		var keep_pending := (_vm != null and _vm.is_incoming_call_active())
+		_has_unread_call = keep_pending
 		_stop_ringtone()
 		_refresh_unread_badges()
 		close_phone()
@@ -1029,10 +1042,18 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader, audio: MgsAudioMgr = n
 
 
 func _open_contacts_app() -> void:
+	if _is_incoming_call_active():
+		_show_incoming_call_overlay(true)
+		return
 	switch_screen(PhoneScreen.CONTACTS)
 
 
 func _open_rine_app() -> void:
+	# 对齐 Game.exe 0x44e9d8：当 Flag(2748)!=0 且未处于 RINE 聊天时，点击 RINE 触发推进分支
+	if _vm != null and _vm.get_flag(2748) != 0 and _vm.get_scr_work(6656) == 0 and _vm.get_flag(2620) == 0:
+		close_phone()
+		amadeus_action.emit(true)
+		return
 	_ensure_best_rine_contact()
 	_refresh_chat_header()
 	switch_screen(PhoneScreen.CHAT)
@@ -1061,23 +1082,50 @@ func _ensure_best_rine_contact() -> void:
 
 
 func _is_incoming_call_active() -> bool:
-	if _has_unread_call:
-		return true
-	if _amadeus_overlay != null and _amadeus_overlay.visible:
-		return true
-	if _vm != null and _vm.get_flag(2620) == 0:
-		if _vm.get_flag(2699) != 0:
+	if _vm != null:
+		if _vm.get_flag(2620) != 0:
+			return false
+		if _vm.is_incoming_call_active():
 			return true
-		if _vm.get_flag(2743) != 0 and _vm.get_flag(2613) == 0:
-			return true
-	return false
+		if _vm.get_flag(2750) != 0 or _vm.get_flag(2748) != 0:
+			return false
+	return _has_unread_call or (_amadeus_overlay != null and _amadeus_overlay.visible)
+
+
+func _update_incoming_call_display() -> bool:
+	var is_amadeus := (_vm == null) or (_vm.get_flag(2743) != 0) or (_vm.get_flag(2740) == 0)
+	if is_amadeus:
+		if _amadeus_logo != null:
+			_amadeus_logo.visible = true
+		if _call_avatar_rect != null:
+			_call_avatar_rect.visible = false
+		if _call_title_lbl != null:
+			_call_title_lbl.text = "Amadeus · 牧濑 红莉栖\n来电中..."
+		if _status_label != null:
+			_status_label.text = "Amadeus"
+	else:
+		var caller_cid := _vm.get_scr_work(6613)
+		var cdef := _get_contact_def(caller_cid if caller_cid > 0 else 1)
+		var cname := str(cdef.get("name", "来电"))
+		var av_idx := int(cdef.get("avatar", 11))
+		if _amadeus_logo != null:
+			_amadeus_logo.visible = false
+		if _call_avatar_rect != null:
+			var av_tex := _avatars[av_idx] if (av_idx >= 0 and av_idx < _avatars.size()) else null
+			_call_avatar_rect.texture = av_tex
+			_call_avatar_rect.visible = (av_tex != null)
+		if _call_title_lbl != null:
+			_call_title_lbl.text = "%s\n来电中..." % cname
+		if _status_label != null:
+			_status_label.text = "電話"
+	return is_amadeus
 
 
 func _show_incoming_call_overlay(ensure_ringtone: bool = true) -> void:
 	_ensure_ui()
-	unlock_amadeus()
-	if _status_label != null:
-		_status_label.text = "Amadeus"
+	var is_amadeus := _update_incoming_call_display()
+	if is_amadeus:
+		unlock_amadeus()
 	if _amadeus_overlay != null:
 		_amadeus_overlay.visible = true
 	if ensure_ringtone:
@@ -1085,9 +1133,14 @@ func _show_incoming_call_overlay(ensure_ringtone: bool = true) -> void:
 
 
 func _open_amadeus_app() -> void:
-	# 若当前正处于未接/响铃中的 Amadeus 来电阶段，点击 Amadeus 图标直接弹出接听/挂断来电界面
+	# 若当前正处于未接/响铃中的来电阶段，点击 Amadeus 图标直接弹出接听/挂断来电界面
 	if _is_incoming_call_active():
 		_show_incoming_call_overlay(true)
+		return
+	# 对齐 Game.exe 0x44ea33：当 Flag(2750)!=0 且 Flag(2613)==0 时，点击 Amadeus 主动发起呼叫并推进剧情
+	if _vm != null and _vm.get_flag(2750) != 0 and _vm.get_flag(2613) == 0 and _vm.get_flag(2620) == 0:
+		close_phone()
+		amadeus_action.emit(true)
 		return
 	_active_contact_idx = 3
 	_refresh_chat_header()
@@ -1260,7 +1313,10 @@ func switch_screen(target: int, push_history: bool = true) -> void:
 	_screen_ringtone.visible = (target == PhoneScreen.RINGTONE)
 
 	var names := ["HOME", "電話", "RINE", "設定", "壁纸", "铃声"]
-	_status_label.text = "Amadeus" if (_amadeus_overlay != null and _amadeus_overlay.visible) else names[clampi(target, 0, names.size() - 1)]
+	if _amadeus_overlay != null and _amadeus_overlay.visible:
+		_update_incoming_call_display()
+	else:
+		_status_label.text = names[clampi(target, 0, names.size() - 1)]
 	if target == PhoneScreen.CHAT:
 		if _active_contact_idx <= 0:
 			_active_contact_idx = 1
@@ -1577,10 +1633,21 @@ func open_phone() -> void:
 	_ensure_ui()
 	_sync_status_date()
 	_is_open = true
-	if _has_unread_call or (_amadeus_overlay != null and _amadeus_overlay.visible):
+	if _vm != null:
+		_vm.set_flag(2603, 0)
+		_vm.set_flag(2604, 0)
+		_vm.set_flag(2617, 0)
+		if _vm.get_flag(2750) != 0 and _vm.get_flag(2613) == 0:
+			unlock_amadeus()
+	if _is_incoming_call_active():
+		_has_unread_call = true
 		_show_incoming_call_overlay(true)
-	elif _current_screen == PhoneScreen.CHAT:
-		_clear_contact_unread(_active_contact_idx)
+		_refresh_unread_badges()
+	else:
+		if _amadeus_overlay != null:
+			_amadeus_overlay.visible = false
+		if _current_screen == PhoneScreen.CHAT:
+			_clear_contact_unread(_active_contact_idx)
 	_animate_x(1340.0)
 	panel_toggled.emit(true)
 
@@ -1618,10 +1685,14 @@ func _animate_x(target_x: float) -> void:
 
 
 func _on_phone_event(subop: int, args: Array) -> void:
-	# 序章 SG0_PhoneCtrl(5) / SG0_PhoneCtrl(10, 13)+PhoneCtrl(0) / SG0_01_01 PhoneCtrl(10, 230)+PhoneCtrl(5) / _rndrine L14 PhoneCtrl(10, 5)+PhoneCtrl(1)
-	# 均为普通手机状态或 RINE 新消息通知；PhoneCtrl(10, arg) 本身仅记录触发参数而不弹来电，
-	# 仅真正的 Amadeus 来电 (subop=20/21 或 PhoneCtrl(1) 配合 arg==1 / arg>=180 如 macrosys2 L324) 才弹来电界面并响铃
+	# 真正来电由 VM 在 Flag(2699) & (Flag(2743) | Flag(2740)) 激活时发出 subop=20；
+	# subop=23 为主动呼叫 Amadeus (2750) 或 RINE 分支触发 (2748)，仅解锁桌面图标而绝不弹来电遮罩；
+	# subop=1 仅保留给无 arg0 过滤的旧测试/外部直呼（VM 正常运行时 PhoneCtrl(1) args 为空）
 	var arg0: int = int(args[0]) if args.size() >= 1 else -1
+	if subop == 23:
+		if arg0 == 2750:
+			unlock_amadeus()
+		return
 	var is_real_call: bool = (
 		subop == 20
 		or subop == 21
@@ -1634,7 +1705,7 @@ func _on_phone_event(subop: int, args: Array) -> void:
 	elif subop == 255 or subop == 5 or subop == 3:
 		if _amadeus_overlay != null:
 			_amadeus_overlay.visible = false
-		_has_unread_call = false
+		_has_unread_call = (_vm != null and _vm.is_incoming_call_active())
 		_stop_ringtone()
 		_refresh_unread_badges()
 		switch_screen(_current_screen, false)
@@ -1968,19 +2039,17 @@ func import_state(st: Dictionary) -> void:
 			if cnt > 0:
 				_unread_by_contact[int(cid_str)] = cnt
 	_has_unread_call = bool(st.get("has_unread_call", false))
-	var show_call: bool = bool(st.get("amadeus_overlay_visible", false)) or _has_unread_call
-	if not show_call and _vm != null:
-		show_call = (_vm.get_flag(0x4B6) != 0 and _vm.get_flag(2699) != 0 and _vm.get_flag(2620) == 0)
+	var vm_call_active: bool = (_vm != null and _vm.is_incoming_call_active())
+	var show_call: bool = bool(st.get("amadeus_overlay_visible", false)) or _has_unread_call or vm_call_active
 	if _amadeus_overlay != null:
 		_amadeus_overlay.visible = show_call
 	if show_call:
 		_has_unread_call = true
+		_update_incoming_call_display()
 	_populate_sticker_tray()
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()
 	_refresh_chat_header()
-	if show_call and _status_label != null:
-		_status_label.text = "Amadeus"
 	_refresh_unread_badges()
 
 

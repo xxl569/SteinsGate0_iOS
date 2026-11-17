@@ -15,6 +15,8 @@ var _vfs: MgsVfs = null
 var _cfg: ConfigManager = null
 var _bgm_player: AudioStreamPlayer = null
 var _voice_player: AudioStreamPlayer = null
+var _ringtone_player: AudioStreamPlayer = null
+var _ringtone_name: String = ""
 var _se_pool: Array[AudioStreamPlayer] = []
 var _se_pool_ids: Array[int] = []
 var _se_pool_names: Array[String] = []
@@ -59,6 +61,12 @@ func _ensure_players() -> void:
 	_voice_player.bus = BUS_VOICE
 	_voice_player.finished.connect(func(): voice_finished.emit())
 	add_child(_voice_player)
+
+	# 独立来电铃声通道，避免与 SC3 SE 通道池互相覆盖或被 AudioReset(ch) 误停
+	_ringtone_player = AudioStreamPlayer.new()
+	_ringtone_player.name = "RingtonePlayer"
+	_ringtone_player.bus = BUS_SE
+	add_child(_ringtone_player)
 
 	for i in range(SE_POOL_SIZE):
 		var p := AudioStreamPlayer.new()
@@ -308,9 +316,10 @@ func stop_se(channel: int = -1) -> void:
 			_se_pool_ids[i] = -1
 			if i < _se_pool_names.size():
 				_se_pool_names[i] = ""
+		if _ringtone_player != null:
+			_ringtone_player.stop()
+		_ringtone_name = ""
 	elif channel < _se_pool.size():
-		if channel < _se_pool_names.size() and _se_pool_names[channel].to_upper().begins_with("SGSE7"):
-			return
 		_se_pool[channel].stop()
 		_se_pool_ids[channel] = -1
 		if channel < _se_pool_names.size():
@@ -327,6 +336,9 @@ func stop_se_by_prefix(prefix: String) -> void:
 	if prefix == "":
 		return
 	var p_upper := prefix.to_upper()
+	if _ringtone_player != null and _ringtone_name.to_upper().begins_with(p_upper):
+		_ringtone_player.stop()
+		_ringtone_name = ""
 	for i in range(_se_pool.size()):
 		if i < _se_pool_names.size() and _se_pool_names[i].to_upper().begins_with(p_upper):
 			_se_pool[i].stop()
@@ -337,6 +349,9 @@ func stop_se_by_prefix(prefix: String) -> void:
 ## 查询指定名称或任意 SE 是否正在播放
 func is_se_playing(entry_name: String = "") -> bool:
 	var target := entry_name.to_upper()
+	if _ringtone_player != null and _ringtone_player.playing:
+		if target == "" or _ringtone_name.to_upper() == target:
+			return true
 	for i in range(_se_pool.size()):
 		if _se_pool[i].playing:
 			if target == "" or (i < _se_pool_names.size() and _se_pool_names[i].to_upper() == target):
@@ -349,6 +364,21 @@ func play_se_by_name(entry_name: String, loop: bool = false) -> bool:
 	_ensure_players()
 	if _vfs == null or not _vfs.is_mounted or entry_name == "":
 		return false
+	if loop and entry_name.to_upper().begins_with("SGSE7"):
+		if _ringtone_player.playing and _ringtone_name.to_upper() == entry_name.to_upper():
+			return true
+		var rt_raw := _vfs.read_entry("se.mpk", entry_name)
+		if rt_raw.is_empty():
+			return false
+		var rt_stream := AudioStreamOggVorbis.load_from_buffer(rt_raw)
+		if rt_stream == null:
+			return false
+		rt_stream.loop = true
+		_ringtone_player.stop()
+		_ringtone_player.stream = rt_stream
+		_ringtone_name = entry_name
+		_ringtone_player.play()
+		return true
 	var idx := _vfs.get_archive_entry_index("se.mpk", entry_name)
 	if idx >= 0:
 		return play_se(idx, loop)

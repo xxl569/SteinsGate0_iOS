@@ -177,7 +177,7 @@ func _connect_signals() -> void:
 	)
 	phone_drawer.unread_state_changed.connect(func(has_unread: bool, unread_count: int):
 		if gesture_helper != null:
-			var vm_unread := vm != null and vm.get_flag(2616) != 0
+			var vm_unread := vm != null and (vm.get_flag(2616) != 0 or vm.is_incoming_call_active())
 			var final_has := has_unread or vm_unread
 			var final_cnt := maxi(unread_count, 1 if vm_unread else 0)
 			gesture_helper.set_phone_unread(final_has, final_cnt)
@@ -557,17 +557,17 @@ func _on_vm_choices_requested(choices: Array) -> void:
 
 
 func _on_vm_trigger_event(subop: int, args: Array) -> void:
-	# 仅真实来电 (20/21 或 PhoneCtrl(1) 配合 arg==1/arg>=180) 或真实收到对方 RINE 消息 (15/46 且发送者 > 0) 时才停止快进
+	# 仅真实来电 (20/21 或 PhoneCtrl(1) 配合 arg==1/arg>=180)、主动呼叫触发 (23) 或真实收到对方 RINE 消息 (15/46 且发送者 > 0) 时才停止快进
 	var arg0: int = int(args[0]) if args.size() >= 1 else -1
-	var is_real_call := (subop == 20 or subop == 21 or (subop == 1 and (arg0 == 1 or arg0 >= 180)))
+	var is_real_call := (subop == 20 or subop == 21 or subop == 23 or (subop == 1 and (arg0 == 1 or arg0 >= 180)))
 	var is_real_rine := ((subop == 15 or subop == 46) and arg0 > 0)
 	var is_real_trigger := is_real_call or is_real_rine
 	if is_real_trigger and _skip_mode and config != null and config.skip_stop_on_trigger:
 		_skip_mode = false
 		_update_mode_indicators()
 	if gesture_helper != null and vm != null and phone_drawer != null:
-		var has_unread := vm.get_flag(2616) != 0 or phone_drawer.get_unread_count() > 0
-		var cnt := maxi(phone_drawer.get_unread_count(), 1 if vm.get_flag(2616) != 0 else 0)
+		var has_unread := vm.get_flag(2616) != 0 or vm.is_incoming_call_active() or phone_drawer.get_unread_count() > 0
+		var cnt := maxi(phone_drawer.get_unread_count(), 1 if (vm.get_flag(2616) != 0 or vm.is_incoming_call_active()) else 0)
 		gesture_helper.set_phone_unread(has_unread, cnt)
 
 
