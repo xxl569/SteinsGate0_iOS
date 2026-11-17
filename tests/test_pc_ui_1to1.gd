@@ -388,17 +388,19 @@ func _run() -> void:
 	main_node.vm.jump_to_script("SG0_00_01.scx", 0)
 	pd_chk.reset_phone_state()
 	pd_chk.close_phone()
-	pd_chk._active_contact_idx = 2 # 故意设为非目标联系人(桶子)，验证 sub=10 先执行 sub=12 后不会在旧联系人上残留幽灵未读
-	main_node.vm.set_scr_work(1501, 1) # 真由理
+	pd_chk._active_contact_idx = 2 # 故意设为非目标联系人(桶子)，验证 PC 真实流程 sub=43(1)/sub=46(1) 后不会在旧联系人上残留幽灵未读
 	main_node.vm._handle_rine_ctrl(50, [9])
 	_check(main_node.vm.get_scr_work(6655) == 162, "SG0_RineCtrl.sub=50(9) 应写入 ScrWork[6655]=162")
+	main_node.vm._handle_rine_ctrl(43, [1]) # PC L01: 加入目标联系人真由理(1)
+	main_node.vm._handle_rine_ctrl(46, [1, 0, 162]) # PC L12: 发送真由理(1)开场第一条消息
+	main_node.vm.set_scr_work(1501, 0) # PC 中 ScrWork[1501] 常为 0，验证 sub=12(0,0) 不会把聊天对象错改成伦太郎(0)
 	main_node.vm._handle_rine_ctrl(10, [24]) # 启动 _rndrine.scx L024
 	var rs0 := main_node.vm.get_rine_state()
 	_check(main_node.vm.get_flag(2614) == 1 and main_node.vm.get_flag(2615) == 0 and main_node.vm.get_flag(2616) == 1,
 		"RINE sub=10 启动后 Flag(2614)=1, Flag(2615)=0, Flag(2616)=1")
 	_check(bool(rs0.get("waiting_reply", false)) and (rs0.get("reply_options", []) as Array).size() == 3,
 		"L024 应停在 sub=14 并注册 3 个回复分支")
-	_check(pd_chk._active_contact_idx == 1, "sub=12 应将当前联系人切换为真由理(1)")
+	_check(pd_chk._active_contact_idx == 1, "sub=43/46 后活跃联系人应为真由理(1)，且 sub=12(0,0) 不可覆盖为 0")
 	_check(int(pd_chk._unread_by_contact.get(2, 0)) == 0 and int(pd_chk._unread_by_contact.get(1, 0)) >= 1,
 		"未读角标必须只挂在目标联系人(1)上，不能残留在旧联系人(2)上")
 	_check((pd_chk._contact_badges[1] as Label).visible and not (pd_chk._contact_badges[2] as Label).visible,
@@ -476,6 +478,57 @@ func _run() -> void:
 	_check(main_node.vm.get_flag(2615) == 1 and main_node.vm.get_flag(2616) == 0,
 		"查看已读后 VM Flag(2615)=1 且 Flag(2616)=0")
 	print("[10/10] _rndrine.scx sub-interpreter, reply/sticker/Amadeus writeback, unread badges & ringtone stop ok")
+
+	# 11. 回归测试：SKIP/AUTO/WAIT 3D金环帧动画无2D旋转、sub=12不污染伦太郎头像、点进RINE即显初始消息、PhoneCtrl(10,5)+PhoneCtrl(1)不误弹来电、L62贴纸分支
+	var m_assets := main_node.theme_loader.get_meswin_assets()
+	var auto_fr: Array = m_assets.get("auto_ring_frames", [])
+	var skip_fr: Array = m_assets.get("skip_ring_frames", [])
+	var wait_fr: Array = m_assets.get("wait_ring_frames", [])
+	_check(auto_fr.size() == 20 and skip_fr.size() == 20 and wait_fr.size() == 20,
+		"MESWIN.DDS 应切出完整 20 帧 AUTO/SKIP/WAIT 3D 环动画序列")
+	main_node.panels.show_dialogue_mode()
+	main_node.panels.set_mode_badge(false, true)
+	main_node.panels._process(0.12)
+	_check(main_node.panels._mode_ring.visible and is_zero_approx(main_node.panels._mode_ring.rotation),
+		"快进模式 SKIP 环应使用原版 3D 序列帧且 rotation=0 禁止 2D 倒转畸变")
+	main_node.panels.set_mode_badge(false, false)
+
+	# 回归测试2 & 3：sub=12(0,0) 不得把聊天对象篡改为 0(伦太郎)，且未回复前点进 RINE 立即显示初始消息
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	pd_chk._on_rine_event(46, [1, 0, 162])
+	pd_chk._on_rine_event(12, [0, 0])
+	pd_chk._on_rine_event(13, [163, 25])
+	pd_chk._on_rine_event(14, [])
+	_check(pd_chk._active_contact_idx == 1, "sub=12(0,0) 后活跃联系人仍应保持 1(真由理)，绝不可变成 0(伦太郎)")
+	pd_chk.open_phone()
+	pd_chk._open_rine_app()
+	_check(pd_chk._chat_title_label.text == "RINE · 真由理",
+		"点进 RINE 顶部标题应显示 RINE · 真由理，实际=%s" % pd_chk._chat_title_label.text)
+	_check(pd_chk._msg_list.get_child_count() >= 1,
+		"刚点进 RINE 短信功能（未点击回复前）应立即显示初始开场消息，实际子项=%d" % pd_chk._msg_list.get_child_count())
+
+	# 回归测试4a：RINE 收信后的 PhoneCtrl(10, 5) + PhoneCtrl(1) 不得误弹 Amadeus 来电
+	pd_chk._on_phone_event(10, [5])
+	pd_chk._on_phone_event(1, [5])
+	_check(not pd_chk._amadeus_overlay.visible,
+		"RINE 收信通知 PhoneCtrl(10,5)+PhoneCtrl(1) 绝不可误触发 Amadeus 来电界面")
+
+	# 回归测试4b：sub=12(0,1) 贴纸回复模式 + _rndrine.scx L64->L65 完整推进
+	pd_chk.reset_phone_state()
+	main_node.vm.reset_vm()
+	main_node.vm.load_script_into_slot(11, "_rndrine.scx")
+	main_node.vm._handle_rine_ctrl(50, [13]) # 铃羽首次 RINE (_phone L13 = 248)
+	main_node.vm._handle_rine_ctrl(46, [7, 0, main_node.vm.get_scr_work(6655)]) # 开场白
+	main_node.vm._handle_rine_ctrl(10, [64]) # 启动 L64 贴纸回复
+	_check(pd_chk._active_contact_idx == 7 or pd_chk.get_unread_count() > 0,
+		"铃羽 RINE 触发后应锁定/提示联系人 7(铃羽)")
+	_check(pd_chk._reply_mode == 1 and pd_chk._reply_options.size() == 3,
+		"L64 应进入贴纸回复模式 (reply_mode=1, 选项数=3)")
+	var ok_st: bool = main_node.vm.submit_rine_sticker(1)
+	_check(ok_st and main_node.vm.get_flag(2614) == 0,
+		"贴纸回复模式下发送贴纸 1 应推进 L65 分支并清除 Flag(2614)")
+	print("[11/11] SKIP/AUTO/WAIT 3D-ring, sub=12/15 sender/avatar, initial RINE display, non-call PhoneCtrl & sticker-reply ok")
 
 	main_node.queue_free()
 	if _failed:

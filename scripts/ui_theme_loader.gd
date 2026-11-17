@@ -62,8 +62,19 @@ func get_title_assets() -> Dictionary:
 	return res
 
 
-## 获取对话框底板与指示图标贴图
+## 获取对话框底板与指示图标贴图（含 AUTO / SKIP / WAIT 20 帧原版 3D 金环动画序列）
 func get_meswin_assets() -> Dictionary:
+	var auto_frames: Array[Texture2D] = []
+	var skip_frames: Array[Texture2D] = []
+	var wait_frames: Array[Texture2D] = []
+	for r in range(5):
+		for c in range(4):
+			auto_frames.append(get_region("MESWIN.DDS", Rect2i(2472 + c * 150, r * 150, 150, 150)))
+			skip_frames.append(get_region("MESWIN.DDS", Rect2i(2472 + c * 150, 750 + r * 150, 150, 150)))
+	for r in range(2):
+		for c in range(10):
+			wait_frames.append(get_region("MESWIN.DDS", Rect2i(1926 + c * 54, 884 + r * 48, 52, 48)))
+
 	return {
 		"box": get_region("MESWIN.DDS", Rect2i(0, 888, 1920, 318)),
 		"accent": get_region("MESWIN.DDS", Rect2i(5, 820, 326, 28)),
@@ -76,9 +87,12 @@ func get_meswin_assets() -> Dictionary:
 		"skip_btn_on": get_region("MESWIN.DDS", Rect2i(2207, 1132, 119, 39)),
 		"auto_badge": get_region("MESWIN.DDS", Rect2i(2192, 1040, 210, 48)),
 		"skip_badge": get_region("MESWIN.DDS", Rect2i(2192, 1090, 210, 48)),
-		"auto_ring": get_region("MESWIN.DDS", Rect2i(2480, 0, 140, 140)),
-		"skip_ring": get_region("MESWIN.DDS", Rect2i(2482, 700, 140, 140)),
-		"wait_ring": get_region("MESWIN.DDS", Rect2i(2036, 912, 48, 48)),
+		"auto_ring": auto_frames[3] if auto_frames.size() > 3 else null,
+		"skip_ring": skip_frames[3] if skip_frames.size() > 3 else null,
+		"wait_ring": wait_frames[2] if wait_frames.size() > 2 else null,
+		"auto_ring_frames": auto_frames,
+		"skip_ring_frames": skip_frames,
+		"wait_ring_frames": wait_frames,
 		"quicksave_gear": get_region("MESWIN.DDS", Rect2i(1930, 686, 260, 140)),
 	}
 

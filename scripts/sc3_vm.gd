@@ -102,9 +102,13 @@ var _rine_active: bool = false
 var _rine_pc: int = 0
 var _rine_waiting_reply: bool = false
 var _rine_contact_id: int = -1
+var _rine_reply_mode: int = 0 # 0=文本选项, 1=贴纸选项 (sub=12 args[1])
+var _rine_self_id: int = 0 # sub=42 设置的己方角色ID (默认0=伦太郎)
+var _rine_members: Array[int] = [] # sub=43/44/45 维护的当前群聊成员
 var _rine_reply_options: Array[Dictionary] = [] # [{ "str_id": int, "label_id": int }]
 var _rine_history_count: int = 0
 var _rine_trigger_label: int = -1
+var _last_phone_ctrl_arg: int = -1 # 记录最近一次 PhoneCtrl(10, arg) 参数以区分 RINE 通知与真正来电
 
 const READ_LINES_PATH := "user://read_lines.json"
 
@@ -1259,12 +1263,15 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var sub := _rd_u8(data, p); p += 1
 			var args: Array = []
 			if sub == 10:
-				args.append(_rd_u16(data, p)); p += 2
+				var arg0 := _rd_u16(data, p); p += 2
+				_last_phone_ctrl_arg = arg0
+				args.append(arg0)
 				set_flag(0x4B6, 1)
 			elif sub == 255:
 				set_flag(0x4B6, 1)
 			elif sub == 0 or sub == 1 or sub == 5:
 				set_flag(0x505, 1)
+				args.append(_last_phone_ctrl_arg)
 			elif sub == 3:
 				set_flag(0x505, 0)
 			th.pc = p
@@ -1421,6 +1428,9 @@ func export_state() -> Dictionary:
 			"pc": _rine_pc,
 			"waiting_reply": _rine_waiting_reply,
 			"contact_id": _rine_contact_id,
+			"reply_mode": _rine_reply_mode,
+			"self_id": _rine_self_id,
+			"members": Array(_rine_members),
 			"reply_options": _rine_reply_options.duplicate(true),
 			"history_count": _rine_history_count,
 			"trigger_label": _rine_trigger_label,
@@ -1453,6 +1463,11 @@ func import_state(state: Dictionary) -> bool:
 		_rine_pc = int(rd.get("pc", 0))
 		_rine_waiting_reply = bool(rd.get("waiting_reply", false))
 		_rine_contact_id = int(rd.get("contact_id", -1))
+		_rine_reply_mode = int(rd.get("reply_mode", 0))
+		_rine_self_id = int(rd.get("self_id", 0))
+		_rine_members.clear()
+		for m in rd.get("members", []):
+			_rine_members.append(int(m))
 		_rine_history_count = int(rd.get("history_count", 0))
 		_rine_trigger_label = int(rd.get("trigger_label", -1))
 		_rine_reply_options.clear()
@@ -1495,9 +1510,13 @@ func _reset_rine_subinterp() -> void:
 	_rine_pc = 0
 	_rine_waiting_reply = false
 	_rine_contact_id = -1
+	_rine_reply_mode = 0
+	_rine_self_id = 0
+	_rine_members.clear()
 	_rine_reply_options.clear()
 	_rine_history_count = 0
 	_rine_trigger_label = -1
+	_last_phone_ctrl_arg = -1
 
 
 func get_rine_state() -> Dictionary:
@@ -1506,6 +1525,9 @@ func get_rine_state() -> Dictionary:
 		"pc": _rine_pc,
 		"waiting_reply": _rine_waiting_reply,
 		"contact_id": _rine_contact_id,
+		"reply_mode": _rine_reply_mode,
+		"self_id": _rine_self_id,
+		"members": Array(_rine_members),
 		"reply_options": _rine_reply_options.duplicate(true),
 		"history_count": _rine_history_count,
 		"trigger_label": _rine_trigger_label,
@@ -1540,17 +1562,18 @@ func _handle_rine_ctrl(sub: int, args: Array) -> void:
 		0x0B: # sub=11: 结束本轮 RINE 回复并更新标志 (Game.exe 0x453d30)
 			_finish_rine_round()
 			rine_event.emit(sub, args)
-		0x0C: # sub=12: 切换当前聊天对象
-			if args.size() >= 1:
-				_rine_contact_id = int(args[0])
+		0x0C: # sub=12: 设置本轮回复关联参数与回复模式 (args[0]=ScrWork[1501], args[1]=0文本/1贴纸；绝非联系人ID！)
+			if args.size() >= 2:
+				_rine_reply_mode = int(args[1])
+			_rine_reply_options.clear()
 			rine_event.emit(sub, args)
-		0x0D: # sub=13: 注册可回复选项 (str_id, branch_label_id)
+		0x0D: # sub=13: 注册可回复选项 (str_id/sticker_id, branch_label_id)
 			if args.size() >= 2 and _rine_reply_options.size() < 3:
 				var opt_str := int(args[0])
 				var opt_lbl := int(args[1])
 				var exists := false
 				for o in _rine_reply_options:
-					if int(o["str_id"]) == opt_str:
+					if int(o["str_id"]) == opt_str and int(o["label_id"]) == opt_lbl:
 						exists = true
 						break
 				if not exists:
@@ -1559,11 +1582,32 @@ func _handle_rine_ctrl(sub: int, args: Array) -> void:
 		0x0E: # sub=14: 等待玩家选择回复
 			_rine_waiting_reply = true
 			rine_event.emit(sub, args)
-		0x0F, 0x2E: # sub=15 / sub=46: 追加聊天消息
+		0x0F, 0x2E: # sub=15 / sub=46: 追加聊天消息 (args[0]=发送者ID: 0=伦太郎自己, >0=对方角色ID)
 			_rine_history_count += 1
-			if args.size() >= 1 and int(args[0]) != 0:
-				set_flag(2616, 1)
-				set_flag(2615, 0)
+			if args.size() >= 1:
+				var sender_id := int(args[0])
+				if sender_id != _rine_self_id and sender_id > 0:
+					_rine_contact_id = sender_id
+					set_flag(2616, 1)
+					set_flag(2615, 0)
+			rine_event.emit(sub, args)
+		0x2A: # sub=42: 设置己方视角角色ID (Game.exe 0x452660, 默认0=伦太郎)
+			if args.size() >= 1:
+				_rine_self_id = int(args[0])
+			rine_event.emit(sub, args)
+		0x2B, 0x2C: # sub=43/44: 将成员加入当前聊天室列表 (Game.exe 0x452580 / 0x452530)
+			if args.size() >= 1:
+				var m_id := int(args[0])
+				if not _rine_members.has(m_id):
+					_rine_members.append(m_id)
+				if m_id != _rine_self_id and m_id > 0:
+					_rine_contact_id = m_id
+			rine_event.emit(sub, args)
+		0x2D: # sub=45: 将成员从当前聊天室移除 (Game.exe 0x452610)
+			if args.size() >= 1:
+				_rine_members.erase(int(args[0]))
+			rine_event.emit(sub, args)
+		0x2F: # sub=47: 清空当前 RINE UI 临时缓冲 (Game.exe 0x452470)
 			rine_event.emit(sub, args)
 		0x28: # sub=40: 初始化/重置 RINE 全局记录 (Game.exe 0x452c30)
 			set_flag(2760, 0) # 0xAC8
@@ -1644,11 +1688,12 @@ func _run_rine_subinterp() -> void:
 			var sp := p + 2
 			var sub := _rd_u8(data, sp); sp += 1
 			var args: Array = []
-			if sub == 0x0C: # 切换联系人
+			if sub == 0x0C: # 设置回复关联参数与模式 (args[1]=0文本/1贴纸，不修改 _rine_contact_id)
 				var e1 := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(e1["end_pos"]); args.append(e1["value"])
 				var e2 := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(e2["end_pos"]); args.append(e2["value"])
 				_rine_pc = sp
-				_rine_contact_id = int(args[0])
+				_rine_reply_mode = int(args[1])
+				_rine_reply_options.clear()
 				rine_event.emit(12, args)
 			elif sub == 0x0D: # 注册可回复选项
 				var e1 := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(e1["end_pos"]); args.append(e1["value"])
@@ -1659,7 +1704,7 @@ func _run_rine_subinterp() -> void:
 					var opt_lbl := int(args[1])
 					var exists := false
 					for o in _rine_reply_options:
-						if int(o["str_id"]) == opt_str:
+						if int(o["str_id"]) == opt_str and int(o["label_id"]) == opt_lbl:
 							exists = true
 							break
 					if not exists:
@@ -1675,9 +1720,12 @@ func _run_rine_subinterp() -> void:
 					var ek := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(ek["end_pos"]); args.append(ek["value"])
 				_rine_pc = sp
 				_rine_history_count += 1
-				if args.size() >= 1 and int(args[0]) != 0:
-					set_flag(2616, 1)
-					set_flag(2615, 0)
+				if args.size() >= 1:
+					var sender_id := int(args[0])
+					if sender_id != _rine_self_id and sender_id > 0:
+						_rine_contact_id = sender_id
+						set_flag(2616, 1)
+						set_flag(2615, 0)
 				rine_event.emit(15, args)
 			elif sub == 0x0B: # 本轮回复结束
 				_rine_pc = sp
@@ -1738,13 +1786,32 @@ func submit_rine_reply(str_id: int) -> bool:
 	return false
 
 
-## 玩家在贴纸托盘发送贴纸，写回已读与历史计数（若有待回复状态且无专用贴纸分支则保持已读计数）
-func submit_rine_sticker(_sticker_idx: int) -> void:
+## 玩家在贴纸托盘发送贴纸，写回已读与历史计数；若当前处于贴纸回复分支 (sub=12 args[1]==1)，则推进对应 _rndrine.scx 分支
+func submit_rine_sticker(sticker_idx: int) -> bool:
 	set_flag(2615, 1)
 	set_flag(2616, 0)
 	_rine_history_count += 1
 	if _rine_history_count > 0:
 		set_flag(2760, 1)
+	if _rine_waiting_reply and _rine_reply_mode == 1 and not _rine_reply_options.is_empty():
+		var target_label := -1
+		for opt in _rine_reply_options:
+			if int(opt["str_id"]) == sticker_idx:
+				target_label = int(opt["label_id"])
+				break
+		if target_label < 0:
+			target_label = int(_rine_reply_options[0]["label_id"])
+		set_flag(2614, 0)
+		_rine_reply_options.clear()
+		_rine_waiting_reply = false
+		if target_label >= 0 and _scripts.has(11):
+			var rlabels: PackedInt32Array = _scripts[11]["labels"]
+			if target_label < rlabels.size():
+				_rine_active = true
+				_rine_pc = int(rlabels[target_label])
+				_run_rine_subinterp()
+				return true
+	return false
 
 
 ## 玩家在 Amadeus 来电界面点击接听(true)或挂断(false)，写回 SG0_PhoneCtrl 状态标志

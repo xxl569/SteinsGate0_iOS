@@ -42,6 +42,10 @@ var _mode_badge: Label = null
 var _mode_ring: TextureRect = null
 var _auto_ring_tex: Texture2D = null
 var _skip_ring_tex: Texture2D = null
+var _auto_ring_frames: Array[Texture2D] = []
+var _skip_ring_frames: Array[Texture2D] = []
+var _wait_ring_frames: Array[Texture2D] = []
+var _mode_ring_is_skip: bool = false
 var _wait_cursor: Label = null
 var _wait_ring: TextureRect = null
 var _choices_panel: PanelContainer = null
@@ -391,6 +395,18 @@ func _bind_textures_and_renderers() -> void:
 			_accent_right.texture = m_assets["accent_right"] as Texture2D
 		_auto_ring_tex = m_assets.get("auto_ring", null) as Texture2D
 		_skip_ring_tex = m_assets.get("skip_ring", null) as Texture2D
+		_auto_ring_frames.clear()
+		for fr in m_assets.get("auto_ring_frames", []):
+			if fr != null:
+				_auto_ring_frames.append(fr as Texture2D)
+		_skip_ring_frames.clear()
+		for fr in m_assets.get("skip_ring_frames", []):
+			if fr != null:
+				_skip_ring_frames.append(fr as Texture2D)
+		_wait_ring_frames.clear()
+		for fr in m_assets.get("wait_ring_frames", []):
+			if fr != null:
+				_wait_ring_frames.append(fr as Texture2D)
 		if m_assets.get("wait_ring", null) != null and _wait_ring != null:
 			_wait_ring.texture = m_assets["wait_ring"] as Texture2D
 		if m_assets.get("quicksave_gear", null) != null and _quicksave_toast != null:
@@ -414,18 +430,25 @@ func _process(delta: float) -> void:
 		if not completed:
 			_body_renderer.step_reveal(delta)
 		var show_wait := completed and not _choices_panel.visible and (_mode_ring == null or not _mode_ring.visible)
-		if _wait_ring != null and _wait_ring.texture != null:
+		if _wait_ring != null and (_wait_ring.texture != null or not _wait_ring_frames.is_empty()):
 			_wait_ring.visible = show_wait
 			_wait_cursor.visible = false
 			if show_wait:
-				_wait_ring.rotation = fmod(_blink_t * 2.4, TAU)
-				_wait_ring.modulate.a = 0.72 + 0.28 * sin(_blink_t * 5.0)
+				_wait_ring.rotation = 0.0
+				if not _wait_ring_frames.is_empty():
+					var widx := int(floor(_blink_t * 18.0)) % _wait_ring_frames.size()
+					_wait_ring.texture = _wait_ring_frames[widx]
+				_wait_ring.modulate.a = 0.78 + 0.22 * sin(_blink_t * 5.0)
 		else:
 			_wait_cursor.visible = show_wait
 			if _wait_cursor.visible:
 				_wait_cursor.modulate.a = 0.55 + 0.45 * sin(_blink_t * 6.0)
 		if _mode_ring != null and _mode_ring.visible:
-			_mode_ring.rotation = fmod(_blink_t * 1.4, TAU)
+			_mode_ring.rotation = 0.0
+			var mframes := _skip_ring_frames if _mode_ring_is_skip else _auto_ring_frames
+			if not mframes.is_empty():
+				var midx := int(floor(_blink_t * 16.0)) % mframes.size()
+				_mode_ring.texture = mframes[midx]
 
 
 func show_quicksaved_toast() -> void:
@@ -495,11 +518,13 @@ func toggle_hide_ui() -> void:
 
 func set_mode_badge(auto_on: bool, skip_on: bool) -> void:
 	if _mode_ring != null:
-		if skip_on and _skip_ring_tex != null:
-			_mode_ring.texture = _skip_ring_tex
+		_mode_ring.rotation = 0.0
+		_mode_ring_is_skip = skip_on
+		if skip_on and (_skip_ring_tex != null or not _skip_ring_frames.is_empty()):
+			_mode_ring.texture = _skip_ring_frames[3] if _skip_ring_frames.size() > 3 else _skip_ring_tex
 			_mode_ring.visible = true
-		elif auto_on and _auto_ring_tex != null:
-			_mode_ring.texture = _auto_ring_tex
+		elif auto_on and (_auto_ring_tex != null or not _auto_ring_frames.is_empty()):
+			_mode_ring.texture = _auto_ring_frames[3] if _auto_ring_frames.size() > 3 else _auto_ring_tex
 			_mode_ring.visible = true
 		else:
 			_mode_ring.visible = false

@@ -119,6 +119,8 @@ var _messages_by_contact: Dictionary = {} # cid -> Array[Dictionary]
 var _unlocked_contacts: Dictionary = {0: true, 1: true, 2: true, 5: true, 6: true, 7: true, 10: true}
 var _amadeus_unlocked: bool = false
 var _reply_options: Array[int] = []
+var _reply_mode: int = 0 # 0=文本回复选项, 1=贴纸回复选项 (sub=12 args[1])
+var _self_contact_id: int = 0 # sub=42 设置的己方视角ID (默认0=冈部伦太郎)
 var _reply_tray_visible: bool = false
 var _unread_by_contact: Dictionary = {} # cid -> int
 var _has_unread_call: bool = false
@@ -923,7 +925,31 @@ func _open_contacts_app() -> void:
 
 
 func _open_rine_app() -> void:
+	_ensure_best_rine_contact()
+	_refresh_chat_header()
 	switch_screen(PhoneScreen.CHAT)
+
+
+func _ensure_best_rine_contact() -> void:
+	# 优先切换到当前有未读消息的对方联系人，避免停留在 0(伦太郎自己) 或空频道
+	if _active_contact_idx > 0 and int(_unread_by_contact.get(_active_contact_idx, 0)) > 0:
+		return
+	for cid_var in _unread_by_contact.keys():
+		var cid := int(cid_var)
+		if cid > 0 and int(_unread_by_contact[cid]) > 0:
+			_active_contact_idx = cid
+			return
+	# 若当前联系人无消息或为 0，切换到最近有消息记录的非己方联系人
+	var cur_msgs: Array = _messages_by_contact.get(_active_contact_idx, [])
+	if _active_contact_idx <= 0 or cur_msgs.is_empty():
+		for cid_var in _messages_by_contact.keys():
+			var cid := int(cid_var)
+			var arr: Array = _messages_by_contact[cid]
+			if cid > 0 and not arr.is_empty():
+				_active_contact_idx = cid
+				return
+		if _active_contact_idx <= 0:
+			_active_contact_idx = 1
 
 
 func _open_amadeus_app() -> void:
@@ -962,6 +988,15 @@ func _populate_sticker_tray() -> void:
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(func():
 			_append_sticker_msg(i)
+			if _reply_mode == 1 and not _reply_options.is_empty():
+				_reply_options.clear()
+				_reply_mode = 0
+				_sticker_tray_visible = false
+				if _sticker_panel != null:
+					_sticker_panel.visible = false
+				if _msg_scroll != null:
+					_msg_scroll.size.y = BODY_H - 122.0
+				_refresh_reply_prompt()
 			rine_sticker_selected.emit(i)
 		)
 		_sticker_grid.add_child(btn)
@@ -1049,6 +1084,8 @@ func switch_screen(target: int, push_history: bool = true) -> void:
 	var names := ["HOME", "電話", "RINE", "設定", "壁纸", "铃声"]
 	_status_label.text = names[clampi(target, 0, names.size() - 1)]
 	if target == PhoneScreen.CHAT:
+		_ensure_best_rine_contact()
+		_refresh_chat_header()
 		_clear_contact_unread(_active_contact_idx)
 
 
@@ -1125,6 +1162,11 @@ func _refresh_reply_prompt() -> void:
 		return
 	if _reply_options.is_empty():
 		_quick_reply_btn.text = "暂无可回复消息"
+		_reply_tray_visible = false
+		if _reply_panel != null:
+			_reply_panel.visible = false
+	elif _reply_mode == 1:
+		_quick_reply_btn.text = "请点击左下角表情贴纸回复 (%d)..." % _reply_options.size()
 		_reply_tray_visible = false
 		if _reply_panel != null:
 			_reply_panel.visible = false
@@ -1239,8 +1281,16 @@ func _animate_x(target_x: float) -> void:
 
 
 func _on_phone_event(subop: int, args: Array) -> void:
-	# 序章 SG0_PhoneCtrl(5) / SG0_PhoneCtrl(10, 32) 为系统状态准备/隐藏，仅 subop=1 或 (subop=10 && args[0]==1) 为实际来电
-	if subop == 1 or (subop == 10 and args.size() >= 1 and int(args[0]) == 1):
+	# 序章 SG0_PhoneCtrl(5) / SG0_PhoneCtrl(10, 13)+PhoneCtrl(0) / _rndrine L14 PhoneCtrl(10, 4/5)+PhoneCtrl(1)
+	# 均为普通手机状态或 RINE 新消息通知，仅真正的 Amadeus 来电 (subop=20/21, 10:1, 或 arg>=180) 才弹来电界面并响铃
+	var arg0: int = int(args[0]) if args.size() >= 1 else -1
+	var is_real_call: bool = (
+		subop == 20
+		or subop == 21
+		or (subop == 10 and (arg0 == 1 or arg0 >= 180))
+		or (subop == 1 and arg0 >= 180)
+	)
+	if is_real_call:
 		unlock_amadeus()
 		_status_label.text = "Amadeus"
 		if _amadeus_overlay != null:
@@ -1261,45 +1311,64 @@ func _on_phone_event(subop: int, args: Array) -> void:
 
 
 func _on_rine_event(subop: int, args: Array) -> void:
-	# 依据 _rndrine.scx 与 SG0_01_01.scx 实测字节码:
-	# 0x00 = RINE 会话初始化 (非聊天消息)
-	# 0x0c (12) / 0x2b (43) = 切换当前聊天对象联系人
-	# 0x0d (13) = 注册单条可回复项 (args[0]=_phone.scx 字符串ID, args[1]=槽位/分支标签序号)
-	# 0x0e (14) = 挂起等待玩家回复
+	# 依据 Game.exe (0x4619b0 / 0x4543c0) 与 _rndrine.scx 实测字节码:
+	# 0x00 = RINE 会话初始化
+	# 0x0a (10) = 启动 _rndrine.scx 子解释器标签
 	# 0x0b (11) = 结束本轮 RINE 回复
-	# 0x0f (15) = 追加消息 (args[0]=0己方/1对方, args[1]=0文本/1贴纸, args[2]=payload_id)
-	# 0x2e (46) = 追加指定角色消息 (args[0]=0己方/联系人ID, args[1]=0文本/1贴纸, args[2]=payload_id)
+	# 0x0c (12) = 设置本轮回复关联参数与回复模式 (args[0]=ScrWork[1501], args[1]=0文本/1贴纸；非联系人ID！)
+	# 0x0d (13) = 注册单条可回复项 (args[0]=_phone.scx 字符串ID 或 贴纸ID, args[1]=分支标签序号)
+	# 0x0e (14) = 挂起等待玩家回复
+	# 0x0f (15) / 0x2e (46) = 追加聊天消息 (args[0]=0己方/>0对方角色ID, args[1]=0文本/1贴纸, args[2]=payload_id)
+	# 0x2a (42) = 设置己方视角角色ID (默认0=冈部伦太郎)
+	# 0x2b (43) / 0x2c (44) = 将联系人加入当前聊天成员列表并激活对话窗口
 	if subop == 0:
 		return
 	elif subop == 10:
 		if not (_is_open and _current_screen == PhoneScreen.CHAT):
-			var target_cid := _active_contact_idx
-			_unread_by_contact[target_cid] = maxi(1, int(_unread_by_contact.get(target_cid, 0)))
-			_refresh_unread_badges()
+			_ensure_best_rine_contact()
+			if _active_contact_idx > 0:
+				_unread_by_contact[_active_contact_idx] = maxi(1, int(_unread_by_contact.get(_active_contact_idx, 0)))
+				_refresh_unread_badges()
 	elif subop == 11:
 		_reply_options.clear()
+		_reply_mode = 0
 		_refresh_reply_prompt()
 		_refresh_unread_badges()
-	elif subop == 12 or subop == 43:
+	elif subop == 12:
+		_reply_mode = int(args[1]) if args.size() >= 2 else 0
+		_reply_options.clear()
+		_refresh_reply_prompt()
+	elif subop == 42:
+		if args.size() >= 1:
+			_self_contact_id = int(args[0])
+	elif subop == 43 or subop == 44:
 		if args.size() > 0:
 			var raw_cid := int(args[0])
-			if _has_contact(raw_cid):
+			if raw_cid != _self_contact_id and raw_cid > 0 and _has_contact(raw_cid):
 				_active_contact_idx = raw_cid
 				unlock_contact(_active_contact_idx)
 				_refresh_chat_header()
 	elif subop == 13:
 		if args.size() >= 1:
 			var opt_id := int(args[0])
-			if opt_id > 0 and opt_id < _phone_offsets.size() and not _reply_options.has(opt_id):
-				_reply_options.append(opt_id)
+			if _reply_mode == 1:
+				if opt_id >= 0 and opt_id < _stickers.size() and not _reply_options.has(opt_id):
+					_reply_options.append(opt_id)
+			else:
+				if opt_id > 0 and opt_id < _phone_offsets.size() and not _reply_options.has(opt_id):
+					_reply_options.append(opt_id)
 		_refresh_reply_prompt()
 	elif subop == 15 or subop == 46:
 		var side_or_cid := int(args[0]) if args.size() > 0 else 1
 		var msg_type := int(args[1]) if args.size() > 1 else 0
 		var payload_id := int(args[2]) if args.size() > 2 else -1
-		var is_self := (side_or_cid == 0)
-		if subop == 46 and not is_self and _has_contact(side_or_cid) and _active_contact_idx != side_or_cid:
-			_active_contact_idx = side_or_cid
+		var is_self := (side_or_cid == _self_contact_id)
+		if not is_self and side_or_cid > 0 and _has_contact(side_or_cid):
+			if _active_contact_idx != side_or_cid:
+				_active_contact_idx = side_or_cid
+				_refresh_chat_header()
+		if _active_contact_idx <= 0:
+			_active_contact_idx = 1
 			_refresh_chat_header()
 		unlock_contact(_active_contact_idx)
 		var appended := false
@@ -1309,7 +1378,7 @@ func _on_rine_event(subop: int, args: Array) -> void:
 				appended = true
 		else:
 			if payload_id >= 0 and payload_id < _phone_offsets.size():
-				var av_idx := 0 if is_self else _get_contact_avatar_idx(_active_contact_idx)
+				var av_idx := _self_contact_id if is_self else _get_contact_avatar_idx(_active_contact_idx)
 				_append_sc3_msg(av_idx, payload_id, is_self)
 				appended = true
 		if appended and not is_self:
@@ -1470,6 +1539,8 @@ func reset_phone_state() -> void:
 	_messages.clear()
 	_messages_by_contact.clear()
 	_reply_options.clear()
+	_reply_mode = 0
+	_self_contact_id = 0
 	_unread_by_contact.clear()
 	_has_unread_call = false
 	_screen_history.clear()
@@ -1499,6 +1570,8 @@ func export_state() -> Dictionary:
 		"unlocked_contacts": uc,
 		"messages_by_contact": mbc,
 		"reply_options": Array(_reply_options),
+		"reply_mode": _reply_mode,
+		"self_contact_id": _self_contact_id,
 		"unread_by_contact": ubc,
 		"has_unread_call": _has_unread_call,
 	}
@@ -1528,6 +1601,10 @@ func import_state(st: Dictionary) -> void:
 	_reply_options.clear()
 	for r in st.get("reply_options", []):
 		_reply_options.append(int(r))
+	_reply_mode = int(st.get("reply_mode", 0))
+	_self_contact_id = int(st.get("self_contact_id", 0))
+	if _active_contact_idx <= 0:
+		_ensure_best_rine_contact()
 	_unread_by_contact.clear()
 	var ubc: Variant = st.get("unread_by_contact", {})
 	if ubc is Dictionary:

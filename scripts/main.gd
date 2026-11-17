@@ -541,8 +541,11 @@ func _on_vm_choices_requested(choices: Array) -> void:
 
 
 func _on_vm_trigger_event(subop: int, args: Array) -> void:
-	# 仅真实来电 (1 / 10:1) 或真实收到 RINE 消息 (15 / 46) 时才停止快进，避免后台系统初始化误停快进
-	var is_real_trigger := (subop == 1 or subop == 15 or subop == 46 or (subop == 10 and args.size() >= 1 and int(args[0]) == 1))
+	# 仅真实来电 (20/21 / 10:1 / arg>=180) 或真实收到对方 RINE 消息 (15 / 46 且发送者 > 0) 时才停止快进
+	var arg0: int = int(args[0]) if args.size() >= 1 else -1
+	var is_real_call := (subop == 20 or subop == 21 or (subop == 10 and (arg0 == 1 or arg0 >= 180)) or (subop == 1 and arg0 >= 180))
+	var is_real_rine := ((subop == 15 or subop == 46) and arg0 > 0)
+	var is_real_trigger := is_real_call or is_real_rine
 	if is_real_trigger and _skip_mode and config != null and config.skip_stop_on_trigger:
 		_skip_mode = false
 		_update_mode_indicators()
