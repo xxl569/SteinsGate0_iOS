@@ -1534,9 +1534,9 @@ func _handle_rine_ctrl(sub: int, args: Array) -> void:
 			set_flag(2615, 0) # 0xA37: RINE 未读
 			set_flag(2616, 1) # 0xA38: RINE 全局未读通知
 			set_scr_work(6656, 0)
-			rine_event.emit(sub, args)
 			if lid >= 0:
 				_start_rine_subinterp(lid)
+			rine_event.emit(sub, args)
 		0x0B: # sub=11: 结束本轮 RINE 回复并更新标志 (Game.exe 0x453d30)
 			_finish_rine_round()
 			rine_event.emit(sub, args)

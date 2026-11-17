@@ -667,6 +667,10 @@ func _on_load_slot(slot_id: int) -> void:
 
 		gesture_helper.set_movie_playing(false)
 		gesture_helper.update_date_display(vm)
+		if phone_drawer != null:
+			var has_unread := vm.get_flag(2616) != 0 or phone_drawer.get_unread_count() > 0
+			var cnt := maxi(phone_drawer.get_unread_count(), 1 if vm.get_flag(2616) != 0 else 0)
+			gesture_helper.set_phone_unread(has_unread, cnt)
 		_play_time_sec = float(meta.get("play_time_sec", 0))
 		_update_mode_indicators()
 		panels.show_dialogue_mode()

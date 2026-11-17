@@ -388,6 +388,7 @@ func _run() -> void:
 	main_node.vm.jump_to_script("SG0_00_01.scx", 0)
 	pd_chk.reset_phone_state()
 	pd_chk.close_phone()
+	pd_chk._active_contact_idx = 2 # 故意设为非目标联系人(桶子)，验证 sub=10 先执行 sub=12 后不会在旧联系人上残留幽灵未读
 	main_node.vm.set_scr_work(1501, 1) # 真由理
 	main_node.vm._handle_rine_ctrl(50, [9])
 	_check(main_node.vm.get_scr_work(6655) == 162, "SG0_RineCtrl.sub=50(9) 应写入 ScrWork[6655]=162")
@@ -397,19 +398,28 @@ func _run() -> void:
 		"RINE sub=10 启动后 Flag(2614)=1, Flag(2615)=0, Flag(2616)=1")
 	_check(bool(rs0.get("waiting_reply", false)) and (rs0.get("reply_options", []) as Array).size() == 3,
 		"L024 应停在 sub=14 并注册 3 个回复分支")
+	_check(pd_chk._active_contact_idx == 1, "sub=12 应将当前联系人切换为真由理(1)")
+	_check(int(pd_chk._unread_by_contact.get(2, 0)) == 0 and int(pd_chk._unread_by_contact.get(1, 0)) >= 1,
+		"未读角标必须只挂在目标联系人(1)上，不能残留在旧联系人(2)上")
+	_check((pd_chk._contact_badges[1] as Label).visible and not (pd_chk._contact_badges[2] as Label).visible,
+		"联系人列表仅目标联系人(1)角标亮起")
 	_check(pd_chk._reply_options.size() == 3 and pd_chk.get_unread_count() > 0,
 		"UiPhoneRine 应同步收到 3 个可回复项与未读角标")
 	_check(main_node.gesture_helper.is_phone_unread(), "左上角日期手机按钮应显示未读提示")
 
-	# 存档/读档往返验证 RINE 子解释器状态
+	# 存档/读档往返验证 RINE 子解释器状态与手机未读状态
 	var rine_snap := main_node._build_save_state()
 	main_node.vm.reset_vm()
+	pd_chk.reset_phone_state()
 	_check(main_node.vm.import_state(rine_snap), "RINE 存档快照恢复应成功")
+	pd_chk.import_state(rine_snap.get("phone_state", {}) as Dictionary)
 	var rs_restored := main_node.vm.get_rine_state()
 	_check(bool(rs_restored.get("waiting_reply", false)) and (rs_restored.get("reply_options", []) as Array).size() == 3,
 		"读档后 _rndrine.scx 子解释器等待回复状态与选项必须完整保留")
 	_check(main_node.vm.get_scr_work(6655) == 162 and main_node.vm.get_flag(2614) == 1,
 		"读档后 ScrWork[6655] 与 Flag(2614) 必须保留")
+	_check(pd_chk.get_unread_count() >= 1 and main_node.gesture_helper.is_phone_unread(),
+		"读档后手机未读角标与左上角未读提示必须保留")
 
 	# 选择第 1 个回复选项 (163 -> L025)，验证子解释器推进后续对话与标志清零
 	var pre_msg_cnt: int = (pd_chk._messages_by_contact.get(1, []) as Array).size()
@@ -421,19 +431,25 @@ func _run() -> void:
 	pd_chk.rine_sticker_selected.emit(2)
 	_check(main_node.vm.get_flag(2615) == 1, "发送贴纸后应保持已读状态")
 
-	# 验证来电铃声播放与接听/挂断写回 + 铃声精确停止
+	# 验证来电铃声播放与真实点击接听/挂断按钮写回 + 铃声精确停止
+	var amadeus_btns := pd_chk._amadeus_overlay.find_children("*", "Button", true, false)
+	_check(amadeus_btns.size() >= 2, "Amadeus 来电遮罩应包含接听与挂断两个按钮")
+	var btn_amadeus_conn := amadeus_btns[0] as Button
+	var btn_amadeus_cancel := amadeus_btns[1] as Button
 	main_node.vm.set_flag(0x4B6, 1)
 	pd_chk._on_phone_event(10, [1])
 	_check(pd_chk._amadeus_overlay.visible, "Amadeus 来电遮罩应显示")
 	_check(main_node.audio.is_se_playing("SGSE700.ogg"), "Amadeus 来电应播放循环铃声 SGSE700.ogg")
-	pd_chk._stop_ringtone()
-	pd_chk.amadeus_action.emit(true)
-	_check(not main_node.audio.is_se_playing("SGSE700.ogg"), "接听来电后 _stop_ringtone() 必须彻底停止铃声")
+	btn_amadeus_conn.pressed.emit()
+	_check(not pd_chk._amadeus_overlay.visible and not main_node.audio.is_se_playing("SGSE700.ogg"),
+		"点击接听按钮后遮罩应关闭且必须彻底停止铃声")
 	_check(main_node.vm.get_flag(0x4B6) == 0 and main_node.vm.get_flag(0x505) == 1,
 		"接听 Amadeus 来电应清除 Flag(0x4B6) 并置位 Flag(0x505)=1")
 	pd_chk._on_phone_event(10, [1])
-	pd_chk._stop_ringtone()
-	pd_chk.amadeus_action.emit(false)
+	_check(main_node.audio.is_se_playing("SGSE700.ogg"), "再次来电应重新播放铃声")
+	btn_amadeus_cancel.pressed.emit()
+	_check(not pd_chk._amadeus_overlay.visible and not main_node.audio.is_se_playing("SGSE700.ogg"),
+		"点击挂断按钮后遮罩应关闭且必须彻底停止铃声")
 	_check(main_node.vm.get_flag(0x4B6) == 0 and main_node.vm.get_flag(0x505) == 0,
 		"挂断 Amadeus 来电应清除 Flag(0x4B6) 与 Flag(0x505)=0")
 
