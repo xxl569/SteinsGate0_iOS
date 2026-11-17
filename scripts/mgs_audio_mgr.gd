@@ -17,6 +17,7 @@ var _bgm_player: AudioStreamPlayer = null
 var _voice_player: AudioStreamPlayer = null
 var _se_pool: Array[AudioStreamPlayer] = []
 var _se_pool_ids: Array[int] = []
+var _se_pool_names: Array[String] = []
 var _se_last_ms: Dictionary = {}
 var _se_cursor: int = 0
 
@@ -66,6 +67,7 @@ func _ensure_players() -> void:
 		add_child(p)
 		_se_pool.append(p)
 		_se_pool_ids.append(-1)
+		_se_pool_names.append("")
 
 
 func bind_vfs(vfs: MgsVfs) -> void:
@@ -294,6 +296,7 @@ func play_se(se_idx: int, loop: bool = false) -> bool:
 	player.stop()
 	player.stream = stream
 	_se_pool_ids[slot_idx] = se_idx
+	_se_pool_names[slot_idx] = entry_name
 	player.play()
 	return true
 
@@ -303,9 +306,40 @@ func stop_se(channel: int = -1) -> void:
 		for i in range(_se_pool.size()):
 			_se_pool[i].stop()
 			_se_pool_ids[i] = -1
+			if i < _se_pool_names.size():
+				_se_pool_names[i] = ""
 	elif channel < _se_pool.size():
 		_se_pool[channel].stop()
 		_se_pool_ids[channel] = -1
+		if channel < _se_pool_names.size():
+			_se_pool_names[channel] = ""
+
+
+## 停止全部 SE 通道（供来电结束/挂断等场景统一调用）
+func stop_all_se() -> void:
+	stop_se(-1)
+
+
+## 按条目前缀精确停止指定 SE（例如 "SGSE7" 停止循环来电铃声而不误伤其他音效）
+func stop_se_by_prefix(prefix: String) -> void:
+	if prefix == "":
+		return
+	var p_upper := prefix.to_upper()
+	for i in range(_se_pool.size()):
+		if i < _se_pool_names.size() and _se_pool_names[i].to_upper().begins_with(p_upper):
+			_se_pool[i].stop()
+			_se_pool_ids[i] = -1
+			_se_pool_names[i] = ""
+
+
+## 查询指定名称或任意 SE 是否正在播放
+func is_se_playing(entry_name: String = "") -> bool:
+	var target := entry_name.to_upper()
+	for i in range(_se_pool.size()):
+		if _se_pool[i].playing:
+			if target == "" or (i < _se_pool_names.size() and _se_pool_names[i].to_upper() == target):
+				return true
+	return false
 
 
 ## 按 se.mpk 条目名直接播放音效（用于手机来电铃声试听 SGSE700.ogg..SGSE706.ogg）
@@ -329,6 +363,7 @@ func play_se_by_name(entry_name: String, loop: bool = false) -> bool:
 	player.stop()
 	player.stream = stream
 	_se_pool_ids[slot_idx] = -2
+	_se_pool_names[slot_idx] = entry_name
 	player.play()
 	return true
 

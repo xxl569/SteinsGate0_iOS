@@ -97,6 +97,15 @@ var _movie_playing: bool = false
 var _auto_click_all_waits: bool = false # 仅测试模式可选
 var skip_active: bool = false # 快进开关（供 0x0046 与协程等待加速读取）
 
+# RINE (_rndrine.scx) 子解释器状态（对齐 Game.exe 0x454160 / 0x4543c0 / 0x454690 / 0x453d30）
+var _rine_active: bool = false
+var _rine_pc: int = 0
+var _rine_waiting_reply: bool = false
+var _rine_contact_id: int = -1
+var _rine_reply_options: Array[Dictionary] = [] # [{ "str_id": int, "label_id": int }]
+var _rine_history_count: int = 0
+var _rine_trigger_label: int = -1
+
 const READ_LINES_PATH := "user://read_lines.json"
 
 
@@ -137,6 +146,7 @@ func reset_vm() -> void:
 	_mes_reveal_done = true
 	_mes_click_pending = false
 	_movie_playing = false
+	_reset_rine_subinterp()
 	# SC3 Windows/PC 基础平台环境预设标志（避免启动检测卡住）
 	set_scr_work(2194, 0)
 	set_scr_work(2195, 0)
@@ -1290,7 +1300,7 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			if sub == 0:
 				p += 2
 			th.pc = p
-		0x37: # SG0_RineCtrl
+		0x37: # SG0_RineCtrl (Game.exe 0x4619b0)
 			var sub := _rd_u8(data, p); p += 1
 			var args: Array = []
 			if sub == 0:
@@ -1313,7 +1323,7 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"]); args.append(e1["value"])
 				var e2 := Sc3Expr.eval(data, p, self, th); p = int(e2["end_pos"]); args.append(e2["value"])
 			th.pc = p
-			rine_event.emit(sub, args)
+			_handle_rine_ctrl(sub, args)
 		0x0A, 0x0B, 0x12, 0x1E, 0x2D, 0x2F, 0x40, 0x41: # 0-操作数指令 (含 10:0B SG0_ChaSync)
 			th.pc = p
 		0x0C, 0x13, 0x14, 0x15, 0x1A, 0x1B, 0x1C, 0x1D, 0x1F, 0x20, 0x21, 0x34, 0x36:
@@ -1406,6 +1416,15 @@ func export_state() -> Dictionary:
 		"scr_work": sw,
 		"flags": fl,
 		"unlocked_tips": unlocked_tips.keys(),
+		"rine_state": {
+			"active": _rine_active,
+			"pc": _rine_pc,
+			"waiting_reply": _rine_waiting_reply,
+			"contact_id": _rine_contact_id,
+			"reply_options": _rine_reply_options.duplicate(true),
+			"history_count": _rine_history_count,
+			"trigger_label": _rine_trigger_label,
+		},
 	}
 
 
@@ -1426,6 +1445,23 @@ func import_state(state: Dictionary) -> bool:
 		set_flag(int(fk), 1)
 	for tk in state.get("unlocked_tips", []):
 		unlocked_tips[int(tk)] = true
+
+	var rs: Variant = state.get("rine_state", {})
+	if rs is Dictionary and not (rs as Dictionary).is_empty():
+		var rd: Dictionary = rs as Dictionary
+		_rine_active = bool(rd.get("active", false))
+		_rine_pc = int(rd.get("pc", 0))
+		_rine_waiting_reply = bool(rd.get("waiting_reply", false))
+		_rine_contact_id = int(rd.get("contact_id", -1))
+		_rine_history_count = int(rd.get("history_count", 0))
+		_rine_trigger_label = int(rd.get("trigger_label", -1))
+		_rine_reply_options.clear()
+		for opt in rd.get("reply_options", []):
+			if opt is Dictionary:
+				_rine_reply_options.append({
+					"str_id": int(opt.get("str_id", -1)),
+					"label_id": int(opt.get("label_id", -1)),
+				})
 
 	var max_tid := 1
 	for st in state.get("threads", []):
@@ -1450,3 +1486,275 @@ func import_state(state: Dictionary) -> bool:
 	_next_thread_id = max_tid
 	script_switched.emit(get_current_script_name())
 	return true
+
+
+# ==================== RINE (_rndrine.scx) 子解释器 & Amadeus 写回 ====================
+
+func _reset_rine_subinterp() -> void:
+	_rine_active = false
+	_rine_pc = 0
+	_rine_waiting_reply = false
+	_rine_contact_id = -1
+	_rine_reply_options.clear()
+	_rine_history_count = 0
+	_rine_trigger_label = -1
+
+
+func get_rine_state() -> Dictionary:
+	return {
+		"active": _rine_active,
+		"pc": _rine_pc,
+		"waiting_reply": _rine_waiting_reply,
+		"contact_id": _rine_contact_id,
+		"reply_options": _rine_reply_options.duplicate(true),
+		"history_count": _rine_history_count,
+		"trigger_label": _rine_trigger_label,
+	}
+
+
+func _handle_rine_ctrl(sub: int, args: Array) -> void:
+	match sub:
+		0x32: # sub=50: 从 _phone.scx(slot 9) 读取索引标签首字 u16 写入 ScrWork[6655] (Game.exe 0x44d620)
+			if not _scripts.has(9):
+				load_script_into_slot(9, "_phone.scx")
+			if _scripts.has(9) and args.size() >= 1:
+				var idx := int(args[0])
+				var ph: Dictionary = _scripts[9]
+				var ph_labels: PackedInt32Array = ph["labels"]
+				var ph_data: PackedByteArray = ph["data"]
+				if idx >= 0 and idx < ph_labels.size():
+					var off := int(ph_labels[idx])
+					if off + 1 < ph_data.size():
+						var base_str_id := _rd_u16(ph_data, off)
+						set_scr_work(6655, base_str_id)
+			rine_event.emit(sub, args)
+		0x0A: # sub=10: 启动 _rndrine.scx 子解释器标签 (Game.exe 0x454690)
+			var lid := int(args[0]) if args.size() >= 1 else -1
+			set_flag(2614, 1) # 0xA36: RINE 待回复
+			set_flag(2615, 0) # 0xA37: RINE 未读
+			set_flag(2616, 1) # 0xA38: RINE 全局未读通知
+			set_scr_work(6656, 0)
+			rine_event.emit(sub, args)
+			if lid >= 0:
+				_start_rine_subinterp(lid)
+		0x0B: # sub=11: 结束本轮 RINE 回复并更新标志 (Game.exe 0x453d30)
+			_finish_rine_round()
+			rine_event.emit(sub, args)
+		0x0C: # sub=12: 切换当前聊天对象
+			if args.size() >= 1:
+				_rine_contact_id = int(args[0])
+			rine_event.emit(sub, args)
+		0x0D: # sub=13: 注册可回复选项 (str_id, branch_label_id)
+			if args.size() >= 2 and _rine_reply_options.size() < 3:
+				var opt_str := int(args[0])
+				var opt_lbl := int(args[1])
+				var exists := false
+				for o in _rine_reply_options:
+					if int(o["str_id"]) == opt_str:
+						exists = true
+						break
+				if not exists:
+					_rine_reply_options.append({"str_id": opt_str, "label_id": opt_lbl})
+			rine_event.emit(sub, args)
+		0x0E: # sub=14: 等待玩家选择回复
+			_rine_waiting_reply = true
+			rine_event.emit(sub, args)
+		0x0F, 0x2E: # sub=15 / sub=46: 追加聊天消息
+			_rine_history_count += 1
+			if args.size() >= 1 and int(args[0]) != 0:
+				set_flag(2616, 1)
+				set_flag(2615, 0)
+			rine_event.emit(sub, args)
+		0x28: # sub=40: 初始化/重置 RINE 全局记录 (Game.exe 0x452c30)
+			set_flag(2760, 0) # 0xAC8
+			set_flag(2741, 0) # 0xAB5
+			set_scr_work(6652, 0)
+			set_scr_work(6653, 0)
+			_rine_history_count = 0
+			_rine_reply_options.clear()
+			_rine_waiting_reply = false
+			_rine_active = false
+			rine_event.emit(sub, args)
+		0x29: # sub=41: 同步历史消息存在标志 (Game.exe 0x452ca0)
+			if _rine_history_count > 0:
+				set_flag(2760, 1)
+			rine_event.emit(sub, args)
+		_:
+			rine_event.emit(sub, args)
+
+
+func _finish_rine_round() -> void:
+	set_flag(2616, 0) # 清除全局未读通知
+	set_flag(1205, 0) # 0x4B5: 清除 RINE 活跃阻塞标志
+	if _rine_history_count > 0:
+		set_flag(2760, 1) # 0xAC8: 存在历史记录
+	set_scr_work(6650, 0)
+	set_scr_work(6651, 0)
+	set_scr_work(6656, 0)
+	_rine_reply_options.clear()
+	_rine_waiting_reply = false
+
+
+func _start_rine_subinterp(label_id: int) -> void:
+	if not _scripts.has(11):
+		load_script_into_slot(11, "_rndrine.scx")
+	if not _scripts.has(11):
+		return
+	var rsc: Dictionary = _scripts[11]
+	var rlabels: PackedInt32Array = rsc["labels"]
+	if label_id < 0 or label_id >= rlabels.size():
+		return
+	_rine_active = true
+	_rine_waiting_reply = false
+	_rine_trigger_label = label_id
+	_rine_reply_options.clear()
+	_rine_pc = int(rlabels[label_id])
+	_run_rine_subinterp()
+
+
+func _run_rine_subinterp() -> void:
+	if not _scripts.has(11):
+		_rine_active = false
+		return
+	var rsc: Dictionary = _scripts[11]
+	var data: PackedByteArray = rsc["data"]
+	var code_end: int = int(rsc["code_end"])
+	var dummy_th := ThreadCtx.new()
+	dummy_th.script_slot = 11
+
+	var guard := 0
+	while _rine_active and not _rine_waiting_reply and _rine_pc < code_end and guard < 256:
+		guard += 1
+		var p := _rine_pc
+		if p + 1 >= data.size():
+			_rine_active = false
+			set_scr_work(6656, 99)
+			break
+		var b0 := int(data[p])
+		var b1 := int(data[p + 1])
+
+		# 仅执行 RINE 子解释器白名单指令: 00:12 SetFlag, 00:13 ResetFlag, 10:37 SG0_RineCtrl
+		if b0 == 0x00 and (b1 == 0x12 or b1 == 0x13):
+			var ev := Sc3Expr.eval(data, p + 2, self, dummy_th)
+			_rine_pc = int(ev["end_pos"])
+			set_flag(int(ev["value"]), 1 if b1 == 0x12 else 0)
+			continue
+
+		if (b0 & 0x7F) == 0x10 and b1 == 0x37:
+			var sp := p + 2
+			var sub := _rd_u8(data, sp); sp += 1
+			var args: Array = []
+			if sub == 0x0C: # 切换联系人
+				var e1 := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(e1["end_pos"]); args.append(e1["value"])
+				var e2 := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(e2["end_pos"]); args.append(e2["value"])
+				_rine_pc = sp
+				_rine_contact_id = int(args[0])
+				rine_event.emit(12, args)
+			elif sub == 0x0D: # 注册可回复选项
+				var e1 := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(e1["end_pos"]); args.append(e1["value"])
+				args.append(_rd_u16(data, sp)); sp += 2
+				_rine_pc = sp
+				if _rine_reply_options.size() < 3:
+					var opt_str := int(args[0])
+					var opt_lbl := int(args[1])
+					var exists := false
+					for o in _rine_reply_options:
+						if int(o["str_id"]) == opt_str:
+							exists = true
+							break
+					if not exists:
+						_rine_reply_options.append({"str_id": opt_str, "label_id": opt_lbl})
+				rine_event.emit(13, args)
+			elif sub == 0x0E: # 挂起等待玩家回复
+				_rine_pc = sp
+				_rine_waiting_reply = true
+				rine_event.emit(14, [])
+				break
+			elif sub == 0x0F: # 追加消息
+				for _k in range(3):
+					var ek := Sc3Expr.eval(data, sp, self, dummy_th); sp = int(ek["end_pos"]); args.append(ek["value"])
+				_rine_pc = sp
+				_rine_history_count += 1
+				if args.size() >= 1 and int(args[0]) != 0:
+					set_flag(2616, 1)
+					set_flag(2615, 0)
+				rine_event.emit(15, args)
+			elif sub == 0x0B: # 本轮回复结束
+				_rine_pc = sp
+				_finish_rine_round()
+				rine_event.emit(11, [])
+				# 若紧随指令不是继续的 RINE 动作（例如 End/Return），结束子解释器
+				if _rine_pc + 2 >= data.size():
+					_rine_active = false
+					set_scr_work(6656, 99)
+					break
+				var nb0 := int(data[_rine_pc])
+				var nb1 := int(data[_rine_pc + 1])
+				var is_next_rine := ((nb0 & 0x7F) == 0x10 and nb1 == 0x37) or (nb0 == 0x00 and (nb1 == 0x12 or nb1 == 0x13))
+				if not is_next_rine:
+					_rine_active = false
+					set_scr_work(6656, 99)
+					break
+			else:
+				_rine_active = false
+				set_scr_work(6656, 99)
+				break
+		else:
+			# 遇到 End (00:00) / Return (00:0E) 等非 RINE 子指令，标记本段完成
+			_rine_active = false
+			set_scr_work(6656, 99)
+			break
+
+
+## 玩家打开/阅读 RINE 聊天后清除未读标志
+func mark_rine_read() -> void:
+	set_flag(2615, 1) # 已读
+	set_flag(2616, 0) # 清除全局未读提示
+
+
+## 玩家在 UI 选择一条 RINE 回复选项，写回状态机并推进 _rndrine.scx 分支
+func submit_rine_reply(str_id: int) -> bool:
+	var target_label := -1
+	for opt in _rine_reply_options:
+		if int(opt["str_id"]) == str_id:
+			target_label = int(opt["label_id"])
+			break
+	set_flag(2615, 1) # 已读
+	set_flag(2614, 0) # 已回复，清除待回复标志
+	set_flag(2616, 0) # 清除全局未读提示
+	_rine_reply_options.clear()
+	_rine_waiting_reply = false
+	_rine_history_count += 1
+	if _rine_history_count > 0:
+		set_flag(2760, 1)
+
+	if target_label >= 0 and _scripts.has(11):
+		var rlabels: PackedInt32Array = _scripts[11]["labels"]
+		if target_label < rlabels.size():
+			_rine_active = true
+			_rine_pc = int(rlabels[target_label])
+			_run_rine_subinterp()
+			return true
+	return false
+
+
+## 玩家在贴纸托盘发送贴纸，写回已读与历史计数（若有待回复状态且无专用贴纸分支则保持已读计数）
+func submit_rine_sticker(_sticker_idx: int) -> void:
+	set_flag(2615, 1)
+	set_flag(2616, 0)
+	_rine_history_count += 1
+	if _rine_history_count > 0:
+		set_flag(2760, 1)
+
+
+## 玩家在 Amadeus 来电界面点击接听(true)或挂断(false)，写回 SG0_PhoneCtrl 状态标志
+func submit_amadeus_action(accepted: bool) -> void:
+	set_flag(0x4B6, 0) # 清除来电等待标志
+	if accepted:
+		set_flag(0x505, 1) # 通话连接标志置位
+		set_scr_work(6656, 1)
+		phone_event.emit(0, [])
+	else:
+		set_flag(0x505, 0) # 挂断/拒接清除通话标志
+		set_scr_work(6656, 0)
+		phone_event.emit(3, [])

@@ -5,6 +5,9 @@ extends Control
 signal panel_toggled(opened: bool)
 signal amadeus_action(accepted: bool)
 signal rine_reply_selected(str_id: int)
+signal rine_sticker_selected(sticker_idx: int)
+signal rine_read_ack()
+signal unread_state_changed(has_unread: bool, unread_count: int)
 
 enum PhoneScreen {
 	HOME = 0,
@@ -117,6 +120,12 @@ var _unlocked_contacts: Dictionary = {0: true, 1: true, 2: true, 5: true, 6: tru
 var _amadeus_unlocked: bool = false
 var _reply_options: Array[int] = []
 var _reply_tray_visible: bool = false
+var _unread_by_contact: Dictionary = {} # cid -> int
+var _has_unread_call: bool = false
+var _home_rine_badge: PanelContainer = null
+var _home_rine_badge_lbl: Label = null
+var _contact_badges: Dictionary = {} # cid -> Label
+var _badge_blink_tween: Tween = null
 
 
 func _ready() -> void:
@@ -257,7 +266,9 @@ func _ensure_ui() -> void:
 	btn_conn.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(false))
 	btn_conn.pressed.connect(func():
 		_amadeus_overlay.visible = false
+		_has_unread_call = false
 		_stop_ringtone()
+		_refresh_unread_badges()
 		amadeus_action.emit(true)
 	)
 	var btn_cancel := Button.new()
@@ -265,7 +276,9 @@ func _ensure_ui() -> void:
 	btn_cancel.add_theme_stylebox_override("normal", UiThemeLoader.make_button_style(true))
 	btn_cancel.pressed.connect(func():
 		_amadeus_overlay.visible = false
+		_has_unread_call = false
 		_stop_ringtone()
+		_refresh_unread_badges()
 		amadeus_action.emit(false)
 	)
 	_connect_bar.add_child(btn_conn)
@@ -313,6 +326,22 @@ func _build_home_screen() -> void:
 		if str(item["title"]) == "Amadeus":
 			_amadeus_btn = btn
 			btn.visible = _amadeus_unlocked
+		elif str(item["title"]) == "RINE":
+			_home_rine_badge = PanelContainer.new()
+			_home_rine_badge.name = "RineUnreadBadge"
+			_home_rine_badge.position = Vector2(62, 2)
+			_home_rine_badge.custom_minimum_size = Vector2(26, 26)
+			_home_rine_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_home_rine_badge.visible = false
+			_home_rine_badge.add_theme_stylebox_override("panel", _make_flat_box(Color(0.92, 0.16, 0.16, 0.98), Color(1.0, 0.85, 0.85, 0.95), 13))
+			_home_rine_badge_lbl = Label.new()
+			_home_rine_badge_lbl.text = "1"
+			_home_rine_badge_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			_home_rine_badge_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			_home_rine_badge_lbl.add_theme_font_size_override("font_size", 14)
+			_home_rine_badge_lbl.add_theme_color_override("font_color", Color.WHITE)
+			_home_rine_badge.add_child(_home_rine_badge_lbl)
+			btn.add_child(_home_rine_badge)
 		col.add_child(btn)
 
 
@@ -342,6 +371,7 @@ func _build_contacts_screen() -> void:
 	scroll.add_child(list)
 
 	_contact_btns.clear()
+	_contact_badges.clear()
 	for c in CONTACT_DEFS:
 		if not bool(c.get("in_phonebook", true)):
 			continue
@@ -376,6 +406,19 @@ func _build_contacts_screen() -> void:
 		name_lbl.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0, 1.0))
 		name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(name_lbl)
+
+		var badge_lbl := Label.new()
+		badge_lbl.name = "ContactUnread_%d" % cid
+		badge_lbl.custom_minimum_size = Vector2(28, 24)
+		badge_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		badge_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		badge_lbl.add_theme_font_size_override("font_size", 14)
+		badge_lbl.add_theme_color_override("font_color", Color.WHITE)
+		badge_lbl.add_theme_stylebox_override("normal", _make_flat_box(Color(0.92, 0.16, 0.16, 0.98), Color(1.0, 0.85, 0.85, 0.9), 12))
+		badge_lbl.visible = false
+		badge_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(badge_lbl)
+		_contact_badges[cid] = badge_lbl
 
 		list.add_child(btn)
 		_contact_btns[cid] = btn
@@ -917,7 +960,10 @@ func _populate_sticker_tray() -> void:
 		btn.icon = tex
 		btn.expand_icon = true
 		btn.focus_mode = Control.FOCUS_NONE
-		btn.pressed.connect(func(): _append_sticker_msg(i))
+		btn.pressed.connect(func():
+			_append_sticker_msg(i)
+			rine_sticker_selected.emit(i)
+		)
 		_sticker_grid.add_child(btn)
 
 
@@ -976,8 +1022,14 @@ func unlock_amadeus() -> void:
 
 
 func _stop_ringtone() -> void:
-	if _audio != null and _audio.has_method("stop_all_se"):
+	if _audio == null:
+		return
+	if _audio.has_method("stop_se_by_prefix"):
+		_audio.stop_se_by_prefix("SGSE7")
+	elif _audio.has_method("stop_all_se"):
 		_audio.stop_all_se()
+	elif _audio.has_method("stop_se"):
+		_audio.stop_se(-1)
 
 
 func switch_screen(target: int, push_history: bool = true) -> void:
@@ -996,6 +1048,8 @@ func switch_screen(target: int, push_history: bool = true) -> void:
 
 	var names := ["HOME", "電話", "RINE", "設定", "壁纸", "铃声"]
 	_status_label.text = names[clampi(target, 0, names.size() - 1)]
+	if target == PhoneScreen.CHAT:
+		_clear_contact_unread(_active_contact_idx)
 
 
 func _go_back() -> void:
@@ -1146,6 +1200,8 @@ func open_phone() -> void:
 	_ensure_ui()
 	_sync_status_date()
 	_is_open = true
+	if _current_screen == PhoneScreen.CHAT:
+		_clear_contact_unread(_active_contact_idx)
 	_animate_x(1340.0)
 	panel_toggled.emit(true)
 
@@ -1153,6 +1209,7 @@ func open_phone() -> void:
 func close_phone() -> void:
 	_ensure_ui()
 	_is_open = false
+	_stop_ringtone()
 	_animate_x(1920.0)
 	panel_toggled.emit(false)
 
@@ -1188,13 +1245,18 @@ func _on_phone_event(subop: int, args: Array) -> void:
 		_status_label.text = "Amadeus"
 		if _amadeus_overlay != null:
 			_amadeus_overlay.visible = true
+		if not _is_open:
+			_has_unread_call = true
+			_refresh_unread_badges()
 		if _audio != null:
 			var rt_idx: int = _config.phone_ringtone_idx if _config != null else 0
 			_audio.play_se_by_name("SGSE%d.ogg" % (700 + clampi(rt_idx, 0, RINGTONE_NAMES.size() - 1)), true)
-	elif subop == 255 or subop == 5:
+	elif subop == 255 or subop == 5 or subop == 3:
 		if _amadeus_overlay != null:
 			_amadeus_overlay.visible = false
+		_has_unread_call = false
 		_stop_ringtone()
+		_refresh_unread_badges()
 		switch_screen(_current_screen, false)
 
 
@@ -1202,11 +1264,22 @@ func _on_rine_event(subop: int, args: Array) -> void:
 	# 依据 _rndrine.scx 与 SG0_01_01.scx 实测字节码:
 	# 0x00 = RINE 会话初始化 (非聊天消息)
 	# 0x0c (12) / 0x2b (43) = 切换当前聊天对象联系人
-	# 0x0d (13) = 注册单条可回复项 (args[0]=_phone.scx 字符串ID, args[1]=槽位序号)
+	# 0x0d (13) = 注册单条可回复项 (args[0]=_phone.scx 字符串ID, args[1]=槽位/分支标签序号)
+	# 0x0e (14) = 挂起等待玩家回复
+	# 0x0b (11) = 结束本轮 RINE 回复
 	# 0x0f (15) = 追加消息 (args[0]=0己方/1对方, args[1]=0文本/1贴纸, args[2]=payload_id)
 	# 0x2e (46) = 追加指定角色消息 (args[0]=0己方/联系人ID, args[1]=0文本/1贴纸, args[2]=payload_id)
 	if subop == 0:
 		return
+	elif subop == 10:
+		if not (_is_open and _current_screen == PhoneScreen.CHAT):
+			var target_cid := _active_contact_idx
+			_unread_by_contact[target_cid] = maxi(1, int(_unread_by_contact.get(target_cid, 0)))
+			_refresh_unread_badges()
+	elif subop == 11:
+		_reply_options.clear()
+		_refresh_reply_prompt()
+		_refresh_unread_badges()
 	elif subop == 12 or subop == 43:
 		if args.size() > 0:
 			var raw_cid := int(args[0])
@@ -1229,13 +1302,25 @@ func _on_rine_event(subop: int, args: Array) -> void:
 			_active_contact_idx = side_or_cid
 			_refresh_chat_header()
 		unlock_contact(_active_contact_idx)
+		var appended := false
 		if msg_type == 1:
 			if payload_id >= 0 and payload_id < _stickers.size():
 				_append_sticker_msg(payload_id, is_self)
+				appended = true
 		else:
 			if payload_id >= 0 and payload_id < _phone_offsets.size():
 				var av_idx := 0 if is_self else _get_contact_avatar_idx(_active_contact_idx)
 				_append_sc3_msg(av_idx, payload_id, is_self)
+				appended = true
+		if appended and not is_self:
+			# 播放 PC 原版 RINE 新消息通知音 SE10_07.ogg (se.mpk 索引 252)
+			if _audio != null:
+				_audio.play_se(252, false)
+			if _is_open and _current_screen == PhoneScreen.CHAT:
+				_clear_contact_unread(_active_contact_idx)
+			else:
+				_unread_by_contact[_active_contact_idx] = int(_unread_by_contact.get(_active_contact_idx, 0)) + 1
+				_refresh_unread_badges()
 
 
 func _append_sc3_msg(avatar_idx: int, str_id: int, is_self: bool = false, record: bool = true) -> void:
@@ -1380,14 +1465,18 @@ func reset_phone_state() -> void:
 	_amadeus_unlocked = false
 	if _amadeus_overlay != null:
 		_amadeus_overlay.visible = false
+	_stop_ringtone()
 	_unlocked_contacts = {0: true, 1: true, 2: true, 5: true, 6: true, 7: true, 10: true}
 	_messages.clear()
 	_messages_by_contact.clear()
 	_reply_options.clear()
+	_unread_by_contact.clear()
+	_has_unread_call = false
 	_screen_history.clear()
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()
 	_refresh_chat_header()
+	_refresh_unread_badges()
 	switch_screen(PhoneScreen.HOME, false)
 
 
@@ -1399,12 +1488,19 @@ func export_state() -> Dictionary:
 	var mbc := {}
 	for cid in _messages_by_contact.keys():
 		mbc[str(cid)] = (_messages_by_contact[cid] as Array).duplicate(true)
+	var ubc := {}
+	for cid in _unread_by_contact.keys():
+		var cnt := int(_unread_by_contact[cid])
+		if cnt > 0:
+			ubc[str(cid)] = cnt
 	return {
 		"active_contact_idx": _active_contact_idx,
 		"amadeus_unlocked": _amadeus_unlocked,
 		"unlocked_contacts": uc,
 		"messages_by_contact": mbc,
 		"reply_options": Array(_reply_options),
+		"unread_by_contact": ubc,
+		"has_unread_call": _has_unread_call,
 	}
 
 
@@ -1432,9 +1528,62 @@ func import_state(st: Dictionary) -> void:
 	_reply_options.clear()
 	for r in st.get("reply_options", []):
 		_reply_options.append(int(r))
+	_unread_by_contact.clear()
+	var ubc: Variant = st.get("unread_by_contact", {})
+	if ubc is Dictionary:
+		for cid_str in (ubc as Dictionary).keys():
+			var cnt := int((ubc as Dictionary)[cid_str])
+			if cnt > 0:
+				_unread_by_contact[int(cid_str)] = cnt
+	_has_unread_call = bool(st.get("has_unread_call", false))
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()
 	_refresh_chat_header()
+	_refresh_unread_badges()
+
+
+func get_unread_count() -> int:
+	var total := 0
+	for cid in _unread_by_contact.keys():
+		total += maxi(0, int(_unread_by_contact[cid]))
+	if _has_unread_call:
+		total += 1
+	return total
+
+
+func _clear_contact_unread(cid: int) -> void:
+	var had := _unread_by_contact.has(cid)
+	_unread_by_contact.erase(cid)
+	_refresh_unread_badges()
+	if had and get_unread_count() == 0:
+		rine_read_ack.emit()
+
+
+func _refresh_unread_badges() -> void:
+	var rine_total := 0
+	for cid in _unread_by_contact.keys():
+		rine_total += maxi(0, int(_unread_by_contact[cid]))
+	if _home_rine_badge != null:
+		_home_rine_badge.visible = rine_total > 0
+		if _home_rine_badge_lbl != null:
+			_home_rine_badge_lbl.text = str(mini(99, rine_total))
+	if _badge_blink_tween != null and _badge_blink_tween.is_valid():
+		_badge_blink_tween.kill()
+		_badge_blink_tween = null
+	if _home_rine_badge != null and rine_total > 0:
+		_home_rine_badge.modulate.a = 1.0
+		_badge_blink_tween = create_tween().set_loops()
+		_badge_blink_tween.tween_property(_home_rine_badge, "modulate:a", 0.35, 0.55)
+		_badge_blink_tween.tween_property(_home_rine_badge, "modulate:a", 1.0, 0.55)
+	for cid in _contact_badges.keys():
+		var lbl := _contact_badges[cid] as Label
+		if is_instance_valid(lbl):
+			var cnt := int(_unread_by_contact.get(int(cid), 0))
+			lbl.visible = cnt > 0
+			if cnt > 0:
+				lbl.text = str(mini(99, cnt))
+	var total := get_unread_count()
+	unread_state_changed.emit(total > 0, total)
 
 
 func _scroll_chat_to_bottom() -> void:

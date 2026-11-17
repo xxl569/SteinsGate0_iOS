@@ -157,6 +157,26 @@ func _connect_signals() -> void:
 		if gesture_helper != null:
 			gesture_helper.set_phone_open(opened)
 	)
+	phone_drawer.rine_reply_selected.connect(func(str_id: int):
+		if vm != null:
+			vm.submit_rine_reply(str_id)
+	)
+	phone_drawer.rine_sticker_selected.connect(func(sticker_idx: int):
+		if vm != null:
+			vm.submit_rine_sticker(sticker_idx)
+	)
+	phone_drawer.rine_read_ack.connect(func():
+		if vm != null:
+			vm.mark_rine_read()
+	)
+	phone_drawer.amadeus_action.connect(func(accepted: bool):
+		if vm != null:
+			vm.submit_amadeus_action(accepted)
+	)
+	phone_drawer.unread_state_changed.connect(func(has_unread: bool, unread_count: int):
+		if gesture_helper != null:
+			gesture_helper.set_phone_unread(has_unread, unread_count)
+	)
 
 	tips_panel.closed.connect(_sync_modal_block)
 	gallery.closed.connect(_sync_modal_block)
@@ -526,6 +546,10 @@ func _on_vm_trigger_event(subop: int, args: Array) -> void:
 	if is_real_trigger and _skip_mode and config != null and config.skip_stop_on_trigger:
 		_skip_mode = false
 		_update_mode_indicators()
+	if gesture_helper != null and vm != null and phone_drawer != null:
+		var has_unread := vm.get_flag(2616) != 0 or phone_drawer.get_unread_count() > 0
+		var cnt := maxi(phone_drawer.get_unread_count(), 1 if vm.get_flag(2616) != 0 else 0)
+		gesture_helper.set_phone_unread(has_unread, cnt)
 
 
 func _on_vm_script_switched(_sname: String) -> void:

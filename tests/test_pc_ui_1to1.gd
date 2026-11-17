@@ -383,6 +383,84 @@ func _run() -> void:
 		DirAccess.remove_absolute(UiPanels.get_slot_thumb_path(reg_slot))
 	print("[9/9] RINE avatars/stickers/reply-tray & title-load stage recovery ok")
 
+	# [10/10] _rndrine.scx 子解释器、回复/贴纸写回、Amadeus 来电写回、未读角标与铃声停止
+	main_node.start_new_game()
+	main_node.vm.jump_to_script("SG0_00_01.scx", 0)
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.vm.set_scr_work(1501, 1) # 真由理
+	main_node.vm._handle_rine_ctrl(50, [9])
+	_check(main_node.vm.get_scr_work(6655) == 162, "SG0_RineCtrl.sub=50(9) 应写入 ScrWork[6655]=162")
+	main_node.vm._handle_rine_ctrl(10, [24]) # 启动 _rndrine.scx L024
+	var rs0 := main_node.vm.get_rine_state()
+	_check(main_node.vm.get_flag(2614) == 1 and main_node.vm.get_flag(2615) == 0 and main_node.vm.get_flag(2616) == 1,
+		"RINE sub=10 启动后 Flag(2614)=1, Flag(2615)=0, Flag(2616)=1")
+	_check(bool(rs0.get("waiting_reply", false)) and (rs0.get("reply_options", []) as Array).size() == 3,
+		"L024 应停在 sub=14 并注册 3 个回复分支")
+	_check(pd_chk._reply_options.size() == 3 and pd_chk.get_unread_count() > 0,
+		"UiPhoneRine 应同步收到 3 个可回复项与未读角标")
+	_check(main_node.gesture_helper.is_phone_unread(), "左上角日期手机按钮应显示未读提示")
+
+	# 存档/读档往返验证 RINE 子解释器状态
+	var rine_snap := main_node._build_save_state()
+	main_node.vm.reset_vm()
+	_check(main_node.vm.import_state(rine_snap), "RINE 存档快照恢复应成功")
+	var rs_restored := main_node.vm.get_rine_state()
+	_check(bool(rs_restored.get("waiting_reply", false)) and (rs_restored.get("reply_options", []) as Array).size() == 3,
+		"读档后 _rndrine.scx 子解释器等待回复状态与选项必须完整保留")
+	_check(main_node.vm.get_scr_work(6655) == 162 and main_node.vm.get_flag(2614) == 1,
+		"读档后 ScrWork[6655] 与 Flag(2614) 必须保留")
+
+	# 选择第 1 个回复选项 (163 -> L025)，验证子解释器推进后续对话与标志清零
+	var pre_msg_cnt: int = (pd_chk._messages_by_contact.get(1, []) as Array).size()
+	pd_chk.rine_reply_selected.emit(163)
+	var post_msg_cnt: int = (pd_chk._messages_by_contact.get(1, []) as Array).size()
+	_check(post_msg_cnt > pre_msg_cnt + 2, "选择回复 163 应驱动 L025 推进多条后续对方消息与贴纸")
+	_check(main_node.vm.get_flag(2614) == 0 and main_node.vm.get_flag(2760) == 1,
+		"回复分支执行完毕后 Flag(2614)=0 且 Flag(2760)=1")
+	pd_chk.rine_sticker_selected.emit(2)
+	_check(main_node.vm.get_flag(2615) == 1, "发送贴纸后应保持已读状态")
+
+	# 验证来电铃声播放与接听/挂断写回 + 铃声精确停止
+	main_node.vm.set_flag(0x4B6, 1)
+	pd_chk._on_phone_event(10, [1])
+	_check(pd_chk._amadeus_overlay.visible, "Amadeus 来电遮罩应显示")
+	_check(main_node.audio.is_se_playing("SGSE700.ogg"), "Amadeus 来电应播放循环铃声 SGSE700.ogg")
+	pd_chk._stop_ringtone()
+	pd_chk.amadeus_action.emit(true)
+	_check(not main_node.audio.is_se_playing("SGSE700.ogg"), "接听来电后 _stop_ringtone() 必须彻底停止铃声")
+	_check(main_node.vm.get_flag(0x4B6) == 0 and main_node.vm.get_flag(0x505) == 1,
+		"接听 Amadeus 来电应清除 Flag(0x4B6) 并置位 Flag(0x505)=1")
+	pd_chk._on_phone_event(10, [1])
+	pd_chk._stop_ringtone()
+	pd_chk.amadeus_action.emit(false)
+	_check(main_node.vm.get_flag(0x4B6) == 0 and main_node.vm.get_flag(0x505) == 0,
+		"挂断 Amadeus 来电应清除 Flag(0x4B6) 与 Flag(0x505)=0")
+
+	# 先打开真由理(1)聊天查看，清除本轮回复产生的未读计数
+	pd_chk._active_contact_idx = 1
+	pd_chk.open_phone()
+	pd_chk.switch_screen(UiPhoneRine.PhoneScreen.CHAT, false)
+	_check(pd_chk.get_unread_count() == 0, "查看真由理(1)聊天后未读应清零")
+
+	# 验证未读角标在关闭手机收信时亮起，并在打开对应联系人聊天后清零
+	pd_chk.close_phone()
+	pd_chk.switch_screen(UiPhoneRine.PhoneScreen.HOME, false)
+	pd_chk._on_rine_event(46, [7, 0, 10])
+	_check(pd_chk.get_unread_count() > 0 and pd_chk._home_rine_badge.visible,
+		"手机关闭收到铃羽新消息时 RINE 桌面图标未读徽章应亮起")
+	_check((pd_chk._contact_badges[7] as Label).visible and main_node.gesture_helper.is_phone_unread(),
+		"联系人列表铃羽角标与左上角手机按钮未读提示均应亮起")
+	pd_chk.open_phone()
+	pd_chk.switch_screen(UiPhoneRine.PhoneScreen.CHAT, false)
+	_check(pd_chk.get_unread_count() == 0 and not pd_chk._home_rine_badge.visible,
+		"打开对应联系人 RINE 聊天后未读角标应全部清零隐藏")
+	_check(not (pd_chk._contact_badges[7] as Label).visible and not main_node.gesture_helper.is_phone_unread(),
+		"联系人角标与左上角手机未读提示应同步清零")
+	_check(main_node.vm.get_flag(2615) == 1 and main_node.vm.get_flag(2616) == 0,
+		"查看已读后 VM Flag(2615)=1 且 Flag(2616)=0")
+	print("[10/10] _rndrine.scx sub-interpreter, reply/sticker/Amadeus writeback, unread badges & ringtone stop ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)

@@ -40,6 +40,9 @@ var _swipe_start: Vector2 = Vector2.ZERO
 var _tracking_swipe: bool = false
 var _last_hud_btn_msec: int = -1000
 var _last_date_text: String = "11/23 (TUE)"
+var _phone_unread_badge: Label = null
+var _phone_blink_tween: Tween = null
+var _phone_has_unread: bool = false
 
 
 func _ready() -> void:
@@ -170,6 +173,25 @@ func _build_hud() -> void:
 	_date_phone_btn.visible = false
 	add_child(_date_phone_btn)
 	_btn_phone = _date_phone_btn
+
+	# 左上角日期手机按钮未读角标（有未读 RINE/来电时亮起并闪烁提示）
+	_phone_unread_badge = Label.new()
+	_phone_unread_badge.name = "PhoneUnreadBadge"
+	_phone_unread_badge.position = Vector2(208, -6)
+	_phone_unread_badge.custom_minimum_size = Vector2(28, 24)
+	_phone_unread_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_phone_unread_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_phone_unread_badge.add_theme_font_size_override("font_size", 14)
+	_phone_unread_badge.add_theme_color_override("font_color", Color.WHITE)
+	var badge_sb := StyleBoxFlat.new()
+	badge_sb.bg_color = Color(0.92, 0.16, 0.16, 0.98)
+	badge_sb.border_color = Color(1.0, 0.85, 0.85, 0.95)
+	badge_sb.set_border_width_all(2)
+	badge_sb.set_corner_radius_all(12)
+	_phone_unread_badge.add_theme_stylebox_override("normal", badge_sb)
+	_phone_unread_badge.visible = false
+	_phone_unread_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_date_phone_btn.add_child(_phone_unread_badge)
 
 	# 2. 左下角快捷功能栏（AUTO / SKIP / LOG / TIPS），与正下方说话人名错开
 	_bottom_left_hud = HBoxContainer.new()
@@ -313,6 +335,29 @@ func set_ui_hidden(hidden: bool) -> void:
 
 func set_phone_open(opened: bool) -> void:
 	is_phone_open = opened
+
+
+func set_phone_unread(has_unread: bool, unread_count: int = 0) -> void:
+	_phone_has_unread = has_unread
+	if _phone_unread_badge == null:
+		return
+	_phone_unread_badge.visible = has_unread
+	if has_unread:
+		_phone_unread_badge.text = str(mini(99, maxi(1, unread_count)))
+	if _phone_blink_tween != null and _phone_blink_tween.is_valid():
+		_phone_blink_tween.kill()
+		_phone_blink_tween = null
+	if has_unread:
+		_phone_unread_badge.modulate.a = 1.0
+		_phone_blink_tween = create_tween().set_loops()
+		_phone_blink_tween.tween_property(_phone_unread_badge, "modulate:a", 0.35, 0.55)
+		_phone_blink_tween.tween_property(_phone_unread_badge, "modulate:a", 1.0, 0.55)
+	else:
+		_phone_unread_badge.modulate.a = 1.0
+
+
+func is_phone_unread() -> bool:
+	return _phone_has_unread
 
 
 func _sync_hud_visibility() -> void:
