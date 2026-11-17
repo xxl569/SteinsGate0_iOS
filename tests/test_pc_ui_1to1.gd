@@ -655,6 +655,78 @@ func _run() -> void:
 		"隐藏 UI 状态下点击屏幕任意位置应立即恢复显示，禁止卡死")
 	print("[13/13] TIPS banner title rendering & UI-hidden tap-to-restore ok")
 
+	# 14. PC 1:1 RINE 文本回复(< > 切换 + 发送) / 贴纸回复(仅显示 3 枚候选贴纸) / 空闲防误触验证
+	_check(pa.get("rine_arrow_left", null) != null and pa.get("rine_arrow_right", null) != null,
+		"RINE 候选切换箭头 < > 纹理应存在")
+	_check(pa.get("rine_arrow_left_active", null) != null and pa.get("rine_arrow_right_active", null) != null,
+		"RINE 候选切换箭头高亮态纹理应存在")
+
+	# 14a: Mode 0 文本回复流程 (SG0_00_01 + _rndrine L024)
+	main_node.start_new_game()
+	main_node.vm.jump_to_script("SG0_00_01.scx", 0)
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.vm._handle_rine_ctrl(50, [9])
+	main_node.vm._handle_rine_ctrl(43, [1])
+	main_node.vm._handle_rine_ctrl(46, [1, 0, main_node.vm.get_scr_work(6655)])
+	main_node.vm._handle_rine_ctrl(10, [24])
+	pd_chk.open_phone()
+	pd_chk._open_rine_app()
+	_check(pd_chk._reply_mode == 0 and pd_chk._reply_options.size() == 3,
+		"Mode 0 应有 3 个文本回复选项")
+	_check(pd_chk._btn_reply_prev.visible and pd_chk._btn_reply_next.visible,
+		"Mode 0 文本回复应显示左右 < > 切换箭头")
+	_check(pd_chk._input_preview_clip.visible and not pd_chk._sticker_panel.visible,
+		"Mode 0 文本回复应在白底输入栏直接预览候选文本，且不得误弹贴纸栏")
+	_check(pd_chk._reply_selected_idx == 0, "Mode 0 初始默认选中第 0 项候选")
+
+	# 点击左表情按钮在 Mode 0 下不得弹出 21 枚贴纸
+	pd_chk._btn_toggle_st.pressed.emit()
+	_check(not pd_chk._sticker_panel.visible, "Mode 0 文本回复模式下点击左下表情按钮不得弹出贴纸面板")
+
+	# 验证 < > 循环切换与存档保留 _reply_selected_idx
+	pd_chk._btn_reply_next.pressed.emit()
+	_check(pd_chk._reply_selected_idx == 1, "点击 > 后应切换到第 1 项候选")
+	var snap_m0 := main_node._build_save_state()
+	pd_chk._btn_reply_prev.pressed.emit()
+	pd_chk._btn_reply_prev.pressed.emit()
+	_check(pd_chk._reply_selected_idx == 2, "从第 0 项点击 < 应回绕到最后一项(2)")
+	pd_chk.import_state(snap_m0.get("phone_state", {}) as Dictionary)
+	_check(pd_chk._reply_selected_idx == 1, "读档后应保留当前选中的文本回复索引(1)")
+
+	# 点击右侧发送按钮应立即发送第 1 项候选 (164 -> L026) 并推进后续消息
+	var m0_pre := (pd_chk._messages_by_contact.get(1, []) as Array).size()
+	pd_chk._btn_send.pressed.emit()
+	var m0_post := (pd_chk._messages_by_contact.get(1, []) as Array).size()
+	_check(pd_chk._reply_options.is_empty() and not pd_chk._btn_reply_prev.visible and not pd_chk._input_preview_clip.visible,
+		"点击发送后应发送所选文本并清空回复输入状态")
+	_check(m0_post > m0_pre + 2 and main_node.vm.get_flag(2614) == 0,
+		"发送文本候选后应追加己方气泡、推进后续剧情消息并清除 Flag(2614)")
+
+	# Idle 状态下点击表情或发送按钮不应打开贴纸栏或发送虚假贴纸
+	var idle_cnt := (pd_chk._messages_by_contact.get(1, []) as Array).size()
+	pd_chk._btn_toggle_st.pressed.emit()
+	pd_chk._btn_send.pressed.emit()
+	_check(not pd_chk._sticker_panel.visible and (pd_chk._messages_by_contact.get(1, []) as Array).size() == idle_cnt,
+		"空闲状态下点击表情或发送不得误弹贴纸或发送假消息")
+
+	# 14b: Mode 1 贴纸回复流程 (_rndrine L64 -> L65)
+	pd_chk.reset_phone_state()
+	main_node.vm.reset_vm()
+	main_node.vm.load_script_into_slot(11, "_rndrine.scx")
+	main_node.vm._handle_rine_ctrl(50, [13])
+	main_node.vm._handle_rine_ctrl(46, [7, 0, main_node.vm.get_scr_work(6655)])
+	main_node.vm._handle_rine_ctrl(10, [64])
+	pd_chk.open_phone()
+	pd_chk._open_rine_app()
+	_check(pd_chk._sticker_panel.visible and pd_chk._sticker_grid.get_child_count() == 3,
+		"Mode 1 贴纸回复进入聊天页应自动展开且仅展示 3 枚候选贴纸，实际=%d" % pd_chk._sticker_grid.get_child_count())
+	var stk_btn_1 := pd_chk._sticker_grid.get_child(1) as Button
+	stk_btn_1.pressed.emit()
+	_check(pd_chk._reply_options.is_empty() and not pd_chk._sticker_panel.visible and main_node.vm.get_flag(2614) == 0,
+		"点击候选贴纸后应发送贴纸、收起托盘并清除 Flag(2614)")
+	print("[14/14] PC 1:1 RINE text reply (< > cycle + send), Mode-1 3-sticker picker & idle lockout ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)

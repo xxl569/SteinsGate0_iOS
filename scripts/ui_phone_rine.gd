@@ -75,6 +75,12 @@ var _sticker_grid: GridContainer = null
 var _reply_panel: PanelContainer = null
 var _reply_list: VBoxContainer = null
 var _quick_reply_btn: Button = null
+var _btn_toggle_st: Button = null
+var _btn_send: Button = null
+var _btn_reply_prev: TextureButton = null
+var _btn_reply_next: TextureButton = null
+var _input_preview_clip: Control = null
+var _input_preview_fr: MgsFontRenderer = null
 var _contact_toast_lbl: Label = null
 var _amadeus_btn: TextureButton = null
 var _contact_btns: Dictionary = {} # cid -> Button
@@ -120,6 +126,7 @@ var _unlocked_contacts: Dictionary = {0: true, 1: true, 2: true, 5: true, 6: tru
 var _amadeus_unlocked: bool = false
 var _reply_options: Array[int] = []
 var _reply_mode: int = 0 # 0=文本回复选项, 1=贴纸回复选项 (sub=12 args[1])
+var _reply_selected_idx: int = 0 # 文本回复模式下当前 < > 选中的候选索引
 var _self_contact_id: int = 0 # sub=42 设置的己方视角ID (默认0=冈部伦太郎)
 var _reply_tray_visible: bool = false
 var _unread_by_contact: Dictionary = {} # cid -> int
@@ -136,6 +143,22 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	visible = true
 	_ensure_ui()
+
+
+func _input(event: InputEvent) -> void:
+	if not visible or not _is_open or _current_screen != PhoneScreen.CHAT:
+		return
+	if _amadeus_overlay != null and _amadeus_overlay.visible:
+		return
+	if _reply_mode == 0 and _reply_options.size() > 1 and event is InputEventKey:
+		var ke := event as InputEventKey
+		if ke.pressed and not ke.echo:
+			if ke.keycode == KEY_LEFT:
+				_cycle_reply_option(-1)
+				get_viewport().set_input_as_handled()
+			elif ke.keycode == KEY_RIGHT:
+				_cycle_reply_option(1)
+				get_viewport().set_input_as_handled()
 
 
 func _ensure_ui() -> void:
@@ -481,71 +504,124 @@ func _build_chat_screen() -> void:
 
 	var bar_plate := ColorRect.new()
 	bar_plate.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bar_plate.color = Color(0.93, 0.95, 0.97, 0.96)
+	bar_plate.color = Color(0.84, 0.87, 0.92, 0.98)
 	bar_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	input_bar.add_child(bar_plate)
 
 	_rine_emoji_tex = TextureRect.new()
-	_rine_emoji_tex.position = Vector2(6, 11)
-	_rine_emoji_tex.size = Vector2(46, 46)
+	_rine_emoji_tex.position = Vector2(10, 13)
+	_rine_emoji_tex.size = Vector2(40, 40)
 	_rine_emoji_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_rine_emoji_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_rine_emoji_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	input_bar.add_child(_rine_emoji_tex)
 
 	_rine_input_bg = TextureRect.new()
-	_rine_input_bg.position = Vector2(54, 4)
-	_rine_input_bg.size = Vector2(346, 60)
+	_rine_input_bg.position = Vector2(56, 8)
+	_rine_input_bg.size = Vector2(342, 52)
 	_rine_input_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_rine_input_bg.stretch_mode = TextureRect.STRETCH_SCALE
 	_rine_input_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	input_bar.add_child(_rine_input_bg)
 
 	_rine_send_tex = TextureRect.new()
-	_rine_send_tex.position = Vector2(404, 13)
-	_rine_send_tex.size = Vector2(42, 42)
+	_rine_send_tex.position = Vector2(410, 18)
+	_rine_send_tex.size = Vector2(30, 32)
 	_rine_send_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_rine_send_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_rine_send_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	input_bar.add_child(_rine_send_tex)
 
-	var btn_toggle_st := Button.new()
-	btn_toggle_st.text = ""
-	btn_toggle_st.position = Vector2(4, 10)
-	btn_toggle_st.size = Vector2(50, 48)
-	btn_toggle_st.flat = true
-	btn_toggle_st.focus_mode = Control.FOCUS_NONE
-	btn_toggle_st.pressed.connect(func():
-		_sticker_tray_visible = not _sticker_tray_visible
-		if _sticker_tray_visible:
-			_reply_tray_visible = false
-			if _reply_panel != null:
-				_reply_panel.visible = false
-		_sticker_panel.visible = _sticker_tray_visible
-		_msg_scroll.size.y = (BODY_H - 302.0) if _sticker_tray_visible else (BODY_H - 122.0)
+	_btn_toggle_st = Button.new()
+	_btn_toggle_st.name = "BtnStickerToggle"
+	_btn_toggle_st.text = ""
+	_btn_toggle_st.position = Vector2(4, 10)
+	_btn_toggle_st.size = Vector2(50, 48)
+	_btn_toggle_st.flat = true
+	_btn_toggle_st.focus_mode = Control.FOCUS_NONE
+	_btn_toggle_st.pressed.connect(func():
+		# PC 原版仅在“贴纸回复分支”(reply_mode==1 且有候选贴纸) 时打开候选贴纸栏，避免无回复时段误导为“只能发表情”
+		if _reply_mode == 1 and not _reply_options.is_empty():
+			_toggle_sticker_tray()
 	)
-	input_bar.add_child(btn_toggle_st)
+	input_bar.add_child(_btn_toggle_st)
+
+	_btn_reply_prev = TextureButton.new()
+	_btn_reply_prev.name = "BtnReplyPrev"
+	_btn_reply_prev.position = Vector2(54, 13)
+	_btn_reply_prev.size = Vector2(28, 42)
+	_btn_reply_prev.ignore_texture_size = true
+	_btn_reply_prev.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	_btn_reply_prev.focus_mode = Control.FOCUS_NONE
+	_btn_reply_prev.visible = false
+	_btn_reply_prev.pressed.connect(func(): _cycle_reply_option(-1))
+	input_bar.add_child(_btn_reply_prev)
+
+	_input_preview_clip = Control.new()
+	_input_preview_clip.name = "InputPreviewClip"
+	_input_preview_clip.position = Vector2(96, 10)
+	_input_preview_clip.size = Vector2(260, 48)
+	_input_preview_clip.clip_contents = true
+	_input_preview_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_input_preview_clip.visible = false
+	input_bar.add_child(_input_preview_clip)
+
+	_input_preview_fr = MgsFontRenderer.new()
+	_input_preview_fr.position = Vector2(2, 4)
+	_input_preview_fr.base_scale = 0.36
+	_input_preview_fr.line_height = 20.0
+	_input_preview_fr.max_line_width = 256.0
+	_input_preview_fr.default_color = Color(0.08, 0.14, 0.22, 1.0)
+	_input_preview_fr.shadow_offset = Vector2.ZERO
+	_input_preview_clip.add_child(_input_preview_fr)
 
 	_quick_reply_btn = Button.new()
-	_quick_reply_btn.text = "暂无可回复消息"
-	_quick_reply_btn.position = Vector2(66, 14)
-	_quick_reply_btn.size = Vector2(320, 40)
+	_quick_reply_btn.name = "BtnQuickReply"
+	_quick_reply_btn.text = "当前无需回复"
+	_quick_reply_btn.position = Vector2(76, 14)
+	_quick_reply_btn.size = Vector2(304, 40)
 	_quick_reply_btn.flat = true
 	_quick_reply_btn.focus_mode = Control.FOCUS_NONE
 	_quick_reply_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_quick_reply_btn.add_theme_font_size_override("font_size", 15)
-	_quick_reply_btn.add_theme_color_override("font_color", Color(0.45, 0.50, 0.58, 0.92))
-	_quick_reply_btn.pressed.connect(_toggle_reply_tray)
+	_quick_reply_btn.add_theme_color_override("font_color", Color(0.16, 0.24, 0.36, 0.95))
+	_quick_reply_btn.add_theme_color_override("font_hover_color", Color(0.10, 0.38, 0.76, 1.0))
+	_quick_reply_btn.add_theme_color_override("font_disabled_color", Color(0.42, 0.48, 0.56, 0.85))
+	_quick_reply_btn.pressed.connect(func():
+		if _reply_mode == 1 and not _reply_options.is_empty():
+			_toggle_sticker_tray()
+		else:
+			_toggle_reply_tray()
+	)
 	input_bar.add_child(_quick_reply_btn)
 
-	var btn_send := Button.new()
-	btn_send.text = ""
-	btn_send.position = Vector2(400, 10)
-	btn_send.size = Vector2(50, 48)
-	btn_send.flat = true
-	btn_send.focus_mode = Control.FOCUS_NONE
-	btn_send.pressed.connect(_toggle_reply_tray)
-	input_bar.add_child(btn_send)
+	_btn_reply_next = TextureButton.new()
+	_btn_reply_next.name = "BtnReplyNext"
+	_btn_reply_next.position = Vector2(370, 13)
+	_btn_reply_next.size = Vector2(28, 42)
+	_btn_reply_next.ignore_texture_size = true
+	_btn_reply_next.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	_btn_reply_next.focus_mode = Control.FOCUS_NONE
+	_btn_reply_next.visible = false
+	_btn_reply_next.pressed.connect(func(): _cycle_reply_option(1))
+	input_bar.add_child(_btn_reply_next)
+
+	_btn_send = Button.new()
+	_btn_send.name = "BtnRineSend"
+	_btn_send.text = ""
+	_btn_send.position = Vector2(400, 10)
+	_btn_send.size = Vector2(50, 48)
+	_btn_send.flat = true
+	_btn_send.focus_mode = Control.FOCUS_NONE
+	_btn_send.pressed.connect(func():
+		if _reply_options.is_empty():
+			return
+		if _reply_mode == 1:
+			_toggle_sticker_tray()
+		else:
+			_send_selected_text_reply()
+	)
+	input_bar.add_child(_btn_send)
 
 	# 底部 RINE 表情贴纸栏（21 枚，默认收起、点左下笑脸弹出）
 	_sticker_panel = PanelContainer.new()
@@ -559,11 +635,16 @@ func _build_chat_screen() -> void:
 	st_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_sticker_panel.add_child(st_scroll)
 
+	var st_center := CenterContainer.new()
+	st_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	st_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	st_scroll.add_child(st_center)
+
 	_sticker_grid = GridContainer.new()
 	_sticker_grid.columns = 5
 	_sticker_grid.add_theme_constant_override("h_separation", 6)
 	_sticker_grid.add_theme_constant_override("v_separation", 6)
-	st_scroll.add_child(_sticker_grid)
+	st_center.add_child(_sticker_grid)
 
 	# 底部 RINE 候选回复选择面板（仅当 _reply_options 非空时弹出真实 SC3 回复选项）
 	_reply_panel = PanelContainer.new()
@@ -863,6 +944,20 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader, audio: MgsAudioMgr = n
 		var rine_sa: Texture2D = _phone_assets.get("rine_send_arrow", null)
 		if rine_sa != null and _rine_send_tex != null:
 			_rine_send_tex.texture = rine_sa
+		var al_norm: Texture2D = _phone_assets.get("rine_arrow_left", null)
+		var al_act: Texture2D = _phone_assets.get("rine_arrow_left_active", null)
+		if _btn_reply_prev != null and al_norm != null:
+			_btn_reply_prev.texture_normal = al_norm
+			if al_act != null:
+				_btn_reply_prev.texture_hover = al_act
+				_btn_reply_prev.texture_pressed = al_act
+		var ar_norm: Texture2D = _phone_assets.get("rine_arrow_right", null)
+		var ar_act: Texture2D = _phone_assets.get("rine_arrow_right_active", null)
+		if _btn_reply_next != null and ar_norm != null:
+			_btn_reply_next.texture_normal = ar_norm
+			if ar_act != null:
+				_btn_reply_next.texture_hover = ar_act
+				_btn_reply_next.texture_pressed = ar_act
 		var set_bg: Texture2D = _phone_assets.get("settings_bg", null)
 		if set_bg != null and _screen_settings != null:
 			var stex := _screen_settings.get_node_or_null("SettingsBgTex") as TextureRect
@@ -907,6 +1002,9 @@ func setup(vfs: MgsVfs, vm: Sc3Vm, loader: UiThemeLoader, audio: MgsAudioMgr = n
 			_phone_offsets.resize(cnt)
 			for i in range(cnt):
 				_phone_offsets[i] = int(_phone_bytes.decode_u32(stbl + i * 4))
+	if _input_preview_fr != null and _vfs != null:
+		_input_preview_fr.bind_vfs(_vfs)
+	_refresh_reply_prompt()
 
 	if _vm != null:
 		if not _vm.phone_event.is_connected(_on_phone_event):
@@ -974,30 +1072,53 @@ func _populate_contact_avatars() -> void:
 
 
 func _populate_sticker_tray() -> void:
+	if _sticker_grid == null:
+		return
 	for c in _sticker_grid.get_children():
 		_sticker_grid.remove_child(c)
 		c.queue_free()
-	for i in range(_stickers.size()):
-		var tex := _stickers[i]
+	var indices: Array[int] = []
+	var is_mode1_pick := (_reply_mode == 1 and not _reply_options.is_empty())
+	if is_mode1_pick:
+		for rid in _reply_options:
+			var sidx := int(rid)
+			if sidx >= 0 and sidx < _stickers.size() and not indices.has(sidx):
+				indices.append(sidx)
+		_sticker_grid.columns = clampi(indices.size(), 1, 3)
+		_sticker_grid.add_theme_constant_override("h_separation", 10)
+	else:
+		for i in range(_stickers.size()):
+			indices.append(i)
+		_sticker_grid.columns = 5
+		_sticker_grid.add_theme_constant_override("h_separation", 6)
+
+	for sidx in indices:
+		var tex := _stickers[sidx]
 		if tex == null:
 			continue
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(76, 66)
+		btn.custom_minimum_size = Vector2(130, 126) if is_mode1_pick else Vector2(76, 66)
 		btn.icon = tex
 		btn.expand_icon = true
+		btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		btn.focus_mode = Control.FOCUS_NONE
+		if is_mode1_pick:
+			btn.add_theme_stylebox_override("normal", _make_flat_box(Color(0.16, 0.24, 0.36, 0.92), Color(0.45, 0.72, 0.98, 0.9), 8))
+			btn.add_theme_stylebox_override("hover", _make_flat_box(Color(0.24, 0.42, 0.68, 0.96), Color(0.75, 0.90, 1.0, 1.0), 8))
+		var chosen_idx := sidx
 		btn.pressed.connect(func():
-			_append_sticker_msg(i)
+			var self_av := _get_contact_avatar_idx(_self_contact_id)
+			_append_sticker_msg(chosen_idx, true, true, self_av)
 			if _reply_mode == 1 and not _reply_options.is_empty():
 				_reply_options.clear()
 				_reply_mode = 0
+				_reply_selected_idx = 0
 				_sticker_tray_visible = false
 				if _sticker_panel != null:
 					_sticker_panel.visible = false
-				if _msg_scroll != null:
-					_msg_scroll.size.y = BODY_H - 122.0
+				_populate_sticker_tray()
 				_refresh_reply_prompt()
-			rine_sticker_selected.emit(i)
+			rine_sticker_selected.emit(chosen_idx)
 		)
 		_sticker_grid.add_child(btn)
 
@@ -1088,6 +1209,11 @@ func switch_screen(target: int, push_history: bool = true) -> void:
 			_active_contact_idx = 1
 		_refresh_chat_header()
 		_clear_contact_unread(_active_contact_idx)
+		if _reply_mode == 1 and not _reply_options.is_empty():
+			_populate_sticker_tray()
+			_sticker_tray_visible = true
+		_refresh_reply_prompt()
+		_scroll_chat_to_bottom()
 
 
 func _go_back() -> void:
@@ -1158,25 +1284,174 @@ func _refresh_chat_header() -> void:
 	_rebuild_chat_for_active_contact()
 
 
+func _update_msg_scroll_height() -> void:
+	if _msg_scroll == null:
+		return
+	var tray_open := _reply_tray_visible or _sticker_tray_visible
+	_msg_scroll.size.y = (BODY_H - 302.0) if tray_open else (BODY_H - 122.0)
+
+
 func _refresh_reply_prompt() -> void:
 	if _quick_reply_btn == null:
 		return
 	if _reply_options.is_empty():
-		_quick_reply_btn.text = "暂无可回复消息"
+		_reply_selected_idx = 0
 		_reply_tray_visible = false
+		_sticker_tray_visible = false
 		if _reply_panel != null:
 			_reply_panel.visible = false
+		if _sticker_panel != null:
+			_sticker_panel.visible = false
+		if _btn_reply_prev != null:
+			_btn_reply_prev.visible = false
+		if _btn_reply_next != null:
+			_btn_reply_next.visible = false
+		if _input_preview_clip != null:
+			_input_preview_clip.visible = false
+		if _rine_input_bg != null:
+			_rine_input_bg.position = Vector2(56, 8)
+			_rine_input_bg.size = Vector2(342, 52)
+		_quick_reply_btn.position = Vector2(68, 14)
+		_quick_reply_btn.size = Vector2(318, 40)
+		_quick_reply_btn.text = "当前无需回复"
+		_quick_reply_btn.disabled = true
+		if _btn_toggle_st != null:
+			_btn_toggle_st.disabled = true
+		if _rine_emoji_tex != null:
+			_rine_emoji_tex.modulate = Color(1.0, 1.0, 1.0, 0.42)
+		if _btn_send != null:
+			_btn_send.disabled = true
+		if _rine_send_tex != null:
+			_rine_send_tex.modulate = Color(1.0, 1.0, 1.0, 0.42)
 	elif _reply_mode == 1:
-		_quick_reply_btn.text = "请点击左下角表情贴纸回复 (%d)..." % _reply_options.size()
+		_reply_selected_idx = 0
 		_reply_tray_visible = false
 		if _reply_panel != null:
 			_reply_panel.visible = false
+		if _sticker_panel != null:
+			_sticker_panel.visible = _sticker_tray_visible
+		if _btn_reply_prev != null:
+			_btn_reply_prev.visible = false
+		if _btn_reply_next != null:
+			_btn_reply_next.visible = false
+		if _input_preview_clip != null:
+			_input_preview_clip.visible = false
+		if _rine_input_bg != null:
+			_rine_input_bg.position = Vector2(56, 8)
+			_rine_input_bg.size = Vector2(342, 52)
+		_quick_reply_btn.position = Vector2(68, 14)
+		_quick_reply_btn.size = Vector2(318, 40)
+		_quick_reply_btn.text = "请选择下方表情贴纸回复 (%d)..." % _reply_options.size()
+		_quick_reply_btn.disabled = false
+		if _btn_toggle_st != null:
+			_btn_toggle_st.disabled = false
+		if _rine_emoji_tex != null:
+			_rine_emoji_tex.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		if _btn_send != null:
+			_btn_send.disabled = false
+		if _rine_send_tex != null:
+			_rine_send_tex.modulate = Color(1.0, 1.0, 1.0, 0.55)
 	else:
-		_quick_reply_btn.text = "点击选择回复 (%d)..." % _reply_options.size()
+		# PC 原版文本回复模式：白底输入框内直接预览当前候选文本，左右 < > 箭头置于输入框两侧切换，右侧发送箭头直接发送
+		_reply_selected_idx = clampi(_reply_selected_idx, 0, _reply_options.size() - 1)
+		_sticker_tray_visible = false
+		if _sticker_panel != null:
+			_sticker_panel.visible = false
+		var show_arrows := _reply_options.size() > 1
+		if _btn_reply_prev != null:
+			_btn_reply_prev.visible = show_arrows
+		if _btn_reply_next != null:
+			_btn_reply_next.visible = show_arrows
+		if _rine_input_bg != null:
+			_rine_input_bg.position = Vector2(84, 8) if show_arrows else Vector2(56, 8)
+			_rine_input_bg.size = Vector2(284, 52) if show_arrows else Vector2(342, 52)
+		var preview_x := 96.0 if show_arrows else 68.0
+		var preview_w := 260.0 if show_arrows else 318.0
+		if _input_preview_clip != null:
+			_input_preview_clip.position = Vector2(preview_x, 10.0)
+			_input_preview_clip.size = Vector2(preview_w, 48.0)
+			_input_preview_clip.visible = true
+		_quick_reply_btn.position = Vector2(preview_x, 10.0)
+		_quick_reply_btn.size = Vector2(preview_w, 48.0)
+		_quick_reply_btn.text = ""
+		_quick_reply_btn.disabled = false
+		if _input_preview_fr != null:
+			_input_preview_fr.max_line_width = preview_w - 4.0
+			if _vfs != null:
+				_input_preview_fr.bind_vfs(_vfs)
+			var cur_opt_id := int(_reply_options[_reply_selected_idx])
+			if not _phone_bytes.is_empty() and cur_opt_id >= 0 and cur_opt_id < _phone_offsets.size():
+				_input_preview_fr.set_sc3_string(_phone_bytes, int(_phone_offsets[cur_opt_id]), _vm, null, true)
+				var ch := _input_preview_fr.get_content_size().y
+				_input_preview_fr.position = Vector2(2.0, 12.0 if ch <= 22.0 else 4.0)
+			else:
+				_quick_reply_btn.text = "点击选择回复 (%d/%d)" % [_reply_selected_idx + 1, _reply_options.size()]
+				if _input_preview_clip != null:
+					_input_preview_clip.visible = false
+		if _btn_toggle_st != null:
+			_btn_toggle_st.disabled = true
+		if _rine_emoji_tex != null:
+			_rine_emoji_tex.modulate = Color(1.0, 1.0, 1.0, 0.42)
+		if _btn_send != null:
+			_btn_send.disabled = false
+		if _rine_send_tex != null:
+			_rine_send_tex.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_update_msg_scroll_height()
+
+
+func _cycle_reply_option(delta: int) -> void:
+	if _reply_mode != 0 or _reply_options.is_empty():
+		return
+	_reply_selected_idx = posmod(_reply_selected_idx + delta, _reply_options.size())
+	_refresh_reply_prompt()
+	if _reply_tray_visible:
+		_rebuild_reply_list()
+
+
+func _send_selected_text_reply() -> void:
+	if _reply_mode != 0 or _reply_options.is_empty():
+		return
+	var idx := clampi(_reply_selected_idx, 0, _reply_options.size() - 1)
+	var opt_id := int(_reply_options[idx])
+	_send_text_reply_option(opt_id)
+
+
+func _send_text_reply_option(opt_id: int) -> void:
+	_reply_options.clear()
+	_reply_selected_idx = 0
+	_reply_tray_visible = false
+	_sticker_tray_visible = false
+	if _reply_panel != null:
+		_reply_panel.visible = false
+	if _sticker_panel != null:
+		_sticker_panel.visible = false
+	var self_av := _get_contact_avatar_idx(_self_contact_id)
+	_append_sc3_msg(self_av, opt_id, true)
+	_refresh_reply_prompt()
+	rine_reply_selected.emit(opt_id)
+
+
+func _toggle_sticker_tray() -> void:
+	if _reply_mode != 1 or _reply_options.is_empty():
+		return
+	_sticker_tray_visible = not _sticker_tray_visible
+	if _sticker_tray_visible:
+		_reply_tray_visible = false
+		if _reply_panel != null:
+			_reply_panel.visible = false
+		_populate_sticker_tray()
+	if _sticker_panel != null:
+		_sticker_panel.visible = _sticker_tray_visible
+	_update_msg_scroll_height()
+	if _sticker_tray_visible:
+		_scroll_chat_to_bottom()
 
 
 func _toggle_reply_tray() -> void:
 	if _reply_options.is_empty():
+		return
+	if _reply_mode == 1:
+		_toggle_sticker_tray()
 		return
 	_reply_tray_visible = not _reply_tray_visible
 	if _reply_tray_visible:
@@ -1186,7 +1461,9 @@ func _toggle_reply_tray() -> void:
 		_rebuild_reply_list()
 	if _reply_panel != null:
 		_reply_panel.visible = _reply_tray_visible
-	_msg_scroll.size.y = (BODY_H - 302.0) if (_reply_tray_visible or _sticker_tray_visible) else (BODY_H - 122.0)
+	_update_msg_scroll_height()
+	if _reply_tray_visible:
+		_scroll_chat_to_bottom()
 
 
 func _rebuild_reply_list() -> void:
@@ -1195,14 +1472,17 @@ func _rebuild_reply_list() -> void:
 	for c in _reply_list.get_children():
 		_reply_list.remove_child(c)
 		c.queue_free()
-	for rid in _reply_options:
-		var opt_id := int(rid)
+	for idx in range(_reply_options.size()):
+		var opt_id := int(_reply_options[idx])
 		if _phone_bytes.is_empty() or opt_id < 0 or opt_id >= _phone_offsets.size():
 			continue
+		var is_cur := (idx == _reply_selected_idx)
 		var btn := Button.new()
 		btn.custom_minimum_size = Vector2(SCREEN_W - 28, 48)
 		btn.focus_mode = Control.FOCUS_NONE
-		btn.add_theme_stylebox_override("normal", _make_flat_box(Color(0.88, 0.94, 0.99, 1.0), Color(0.32, 0.62, 0.92, 0.9), 6))
+		var norm_bg := Color(0.76, 0.90, 1.0, 1.0) if is_cur else Color(0.88, 0.94, 0.99, 1.0)
+		var norm_bd := Color(0.14, 0.48, 0.88, 1.0) if is_cur else Color(0.32, 0.62, 0.92, 0.9)
+		btn.add_theme_stylebox_override("normal", _make_flat_box(norm_bg, norm_bd, 6))
 		btn.add_theme_stylebox_override("hover", _make_flat_box(Color(0.24, 0.62, 0.96, 1.0), Color(0.10, 0.45, 0.85, 1.0), 6))
 		var holder := Control.new()
 		holder.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1210,8 +1490,9 @@ func _rebuild_reply_list() -> void:
 		btn.add_child(holder)
 		var fr := MgsFontRenderer.new()
 		fr.bind_vfs(_vfs)
-		fr.base_scale = 0.52
-		fr.line_height = 28.0
+		fr.position = Vector2(10, 6)
+		fr.base_scale = 0.50
+		fr.line_height = 26.0
 		fr.max_line_width = SCREEN_W - 48.0
 		fr.default_color = Color(0.08, 0.14, 0.22, 1.0)
 		fr.shadow_offset = Vector2.ZERO
@@ -1219,15 +1500,9 @@ func _rebuild_reply_list() -> void:
 		fr.set_sc3_string(_phone_bytes, int(_phone_offsets[opt_id]), _vm, null, true)
 		var h_est := maxf(46.0, fr.get_content_size().y + 14.0)
 		btn.custom_minimum_size = Vector2(SCREEN_W - 28, h_est)
+		var chosen_opt := opt_id
 		btn.pressed.connect(func():
-			_reply_options.erase(opt_id)
-			_reply_tray_visible = false
-			if _reply_panel != null:
-				_reply_panel.visible = false
-			_msg_scroll.size.y = BODY_H - 122.0
-			_append_sc3_msg(0, opt_id, true)
-			_refresh_reply_prompt()
-			rine_reply_selected.emit(opt_id)
+			_send_text_reply_option(chosen_opt)
 		)
 		_reply_list.add_child(btn)
 
@@ -1330,14 +1605,19 @@ func _on_rine_event(subop: int, args: Array) -> void:
 			if _active_contact_idx > 0:
 				_unread_by_contact[_active_contact_idx] = maxi(1, int(_unread_by_contact.get(_active_contact_idx, 0)))
 				_refresh_unread_badges()
-	elif subop == 11:
+	elif subop == 11 or subop == 40 or subop == 47:
 		_reply_options.clear()
 		_reply_mode = 0
+		_reply_selected_idx = 0
+		_populate_sticker_tray()
 		_refresh_reply_prompt()
 		_refresh_unread_badges()
 	elif subop == 12:
 		_reply_mode = int(args[1]) if args.size() >= 2 else 0
 		_reply_options.clear()
+		_reply_selected_idx = 0
+		_reply_tray_visible = false
+		_sticker_tray_visible = false
 		_refresh_reply_prompt()
 	elif subop == 42:
 		if args.size() >= 1:
@@ -1358,7 +1638,16 @@ func _on_rine_event(subop: int, args: Array) -> void:
 			else:
 				if opt_id > 0 and opt_id < _phone_offsets.size() and not _reply_options.has(opt_id):
 					_reply_options.append(opt_id)
+		if _reply_mode == 1 and not _reply_options.is_empty():
+			_populate_sticker_tray()
 		_refresh_reply_prompt()
+	elif subop == 14:
+		if _reply_mode == 1 and not _reply_options.is_empty():
+			_populate_sticker_tray()
+			_sticker_tray_visible = true
+		_refresh_reply_prompt()
+		if _sticker_tray_visible:
+			_scroll_chat_to_bottom()
 	elif subop == 15 or subop == 46:
 		var side_or_cid := int(args[0]) if args.size() > 0 else 1
 		var msg_type := int(args[1]) if args.size() > 1 else 0
@@ -1542,10 +1831,14 @@ func reset_phone_state() -> void:
 	_messages_by_contact.clear()
 	_reply_options.clear()
 	_reply_mode = 0
+	_reply_selected_idx = 0
+	_reply_tray_visible = false
+	_sticker_tray_visible = false
 	_self_contact_id = 0
 	_unread_by_contact.clear()
 	_has_unread_call = false
 	_screen_history.clear()
+	_populate_sticker_tray()
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()
 	_refresh_chat_header()
@@ -1571,8 +1864,9 @@ func export_state() -> Dictionary:
 		"amadeus_unlocked": _amadeus_unlocked,
 		"unlocked_contacts": uc,
 		"messages_by_contact": mbc,
-		"reply_options": Array(_reply_options),
+		"reply_options": _reply_options.duplicate(),
 		"reply_mode": _reply_mode,
+		"reply_selected_idx": _reply_selected_idx,
 		"self_contact_id": _self_contact_id,
 		"unread_by_contact": ubc,
 		"has_unread_call": _has_unread_call,
@@ -1600,10 +1894,14 @@ func import_state(st: Dictionary) -> void:
 					arr.append((m as Dictionary).duplicate(true))
 					_messages.append(m as Dictionary)
 			_messages_by_contact[cid] = arr
+	var raw_opts := (st.get("reply_options", []) as Array).duplicate()
 	_reply_options.clear()
-	for r in st.get("reply_options", []):
+	for r in raw_opts:
 		_reply_options.append(int(r))
 	_reply_mode = int(st.get("reply_mode", 0))
+	_reply_selected_idx = int(st.get("reply_selected_idx", 0))
+	_reply_tray_visible = false
+	_sticker_tray_visible = (_reply_mode == 1 and not _reply_options.is_empty() and _current_screen == PhoneScreen.CHAT)
 	_self_contact_id = int(st.get("self_contact_id", 0))
 	if _active_contact_idx <= 0:
 		_ensure_best_rine_contact()
@@ -1615,6 +1913,7 @@ func import_state(st: Dictionary) -> void:
 			if cnt > 0:
 				_unread_by_contact[int(cid_str)] = cnt
 	_has_unread_call = bool(st.get("has_unread_call", false))
+	_populate_sticker_tray()
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()
 	_refresh_chat_header()
