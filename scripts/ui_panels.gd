@@ -103,6 +103,7 @@ func _ensure_ui() -> void:
 		return
 	_built = true
 	DirAccess.make_dir_recursive_absolute(SAVE_DIR)
+	_migrate_legacy_slot0()
 	_build_title_view()
 	_build_dialogue_view()
 	_build_modal_layer()
@@ -834,6 +835,37 @@ func _on_dialogue_tap(event: InputEvent) -> void:
 
 # ==================== 存档文件读写辅助 ====================
 
+static var _legacy_slot0_checked: bool = false
+
+
+static func _migrate_legacy_slot0() -> void:
+	if _legacy_slot0_checked:
+		return
+	_legacy_slot0_checked = true
+	var p0 := get_slot_path(0)
+	var p1 := get_slot_path(1)
+	if FileAccess.file_exists(p0) and not FileAccess.file_exists(p1):
+		var txt0 := FileAccess.get_file_as_string(p0)
+		var parsed: Variant = JSON.parse_string(txt0)
+		if parsed is Dictionary:
+			var meta := (parsed as Dictionary).duplicate(true)
+			meta["slot_id"] = 1
+			var f := FileAccess.open(p1, FileAccess.WRITE)
+			if f != null:
+				f.store_string(JSON.stringify(meta))
+				f.close()
+				DirAccess.remove_absolute(p0)
+		else:
+			DirAccess.rename_absolute(p0, p1)
+
+		var thumb0 := get_slot_thumb_path(0)
+		var thumb1 := get_slot_thumb_path(1)
+		if FileAccess.file_exists(thumb0) and not FileAccess.file_exists(thumb1):
+			DirAccess.rename_absolute(thumb0, thumb1)
+		elif FileAccess.file_exists(thumb0):
+			DirAccess.remove_absolute(thumb0)
+
+
 static func get_slot_path(slot_id: int) -> String:
 	return "%s/slot_%02d.json" % [SAVE_DIR, slot_id]
 
@@ -843,7 +875,8 @@ static func get_slot_thumb_path(slot_id: int) -> String:
 
 
 func _has_any_save() -> bool:
-	for s in range(NUM_SAVE_SLOTS):
+	_migrate_legacy_slot0()
+	for s in range(1, NUM_SAVE_SLOTS + 1):
 		if FileAccess.file_exists(get_slot_path(s)):
 			return true
 	return FileAccess.file_exists(get_slot_path(99))
@@ -900,10 +933,13 @@ static func set_slot_locked(slot_id: int, locked: bool) -> bool:
 
 
 static func read_slot_meta(slot_id: int) -> Dictionary:
+	_migrate_legacy_slot0()
 	var p := get_slot_path(slot_id)
 	if not FileAccess.file_exists(p):
 		return {}
 	var txt := FileAccess.get_file_as_string(p)
+	if txt.strip_edges().is_empty():
+		return {}
 	var parsed: Variant = JSON.parse_string(txt)
 	if parsed is Dictionary:
 		return parsed as Dictionary

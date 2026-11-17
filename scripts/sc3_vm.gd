@@ -97,6 +97,7 @@ var _mes_click_pending: bool = false
 var _movie_playing: bool = false
 var _auto_click_all_waits: bool = false # 仅测试模式可选
 var skip_active: bool = false # 快进开关（供 0x0046 与协程等待加速读取）
+var is_importing_state: bool = false # 状态导入保护开关（防止导入期间发出的 script_switched 触发自动快照覆写）
 
 # RINE (_rndrine.scx) 子解释器状态（对齐 Game.exe 0x454160 / 0x4543c0 / 0x454690 / 0x453d30）
 var _rine_active: bool = false
@@ -1531,6 +1532,7 @@ func export_state() -> Dictionary:
 func import_state(state: Dictionary) -> bool:
 	if state.is_empty():
 		return false
+	is_importing_state = true
 	reset_vm()
 
 	var loaded_slots: Dictionary = state.get("loaded_slots", {})
@@ -1593,6 +1595,7 @@ func import_state(state: Dictionary) -> bool:
 		_threads.append(th)
 	_next_thread_id = max_tid
 	script_switched.emit(get_current_script_name())
+	is_importing_state = false
 	return true
 
 

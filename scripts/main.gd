@@ -572,6 +572,8 @@ func _on_vm_trigger_event(subop: int, args: Array) -> void:
 
 
 func _on_vm_script_switched(_sname: String) -> void:
+	if vm != null and vm.is_importing_state:
+		return
 	# 按设置决定是否自动快速存档留存最近切换脚本进度 (0=场景, 2=双方)
 	if config == null or config.auto_quicksave_mode == 0 or config.auto_quicksave_mode == 2:
 		UiPanels.write_slot_data(99, _build_save_state(), "自动章节切换", int(_play_time_sec))
@@ -580,6 +582,8 @@ func _on_vm_script_switched(_sname: String) -> void:
 
 
 func _build_save_state() -> Dictionary:
+	if vm == null:
+		return {}
 	var st := vm.export_state()
 	if stage != null:
 		st["stage_state"] = stage.export_state()
@@ -607,7 +611,22 @@ func _capture_pending_thumb() -> void:
 
 
 func _on_save_slot(slot_id: int) -> void:
-	var summary := "第 %d 条回顾" % vm.backlog.size()
+	var summary := ""
+	if not _last_dialogue_entry.is_empty():
+		var sc := str(_last_dialogue_entry.get("script", "")).get_basename()
+		var str_id: int = int(_last_dialogue_entry.get("str_id", -1))
+		if sc != "":
+			if str_id >= 0:
+				summary = "%s 对白回顾 #%d" % [sc, str_id]
+			else:
+				summary = "%s 对白回顾" % sc
+	elif vm != null:
+		var sc := vm.get_current_script_name().get_basename()
+		if sc != "":
+			summary = "%s 对白回顾" % sc
+	if summary == "":
+		summary = "第 %d 条回顾" % (vm.backlog.size() if vm != null else 0)
+
 	var thumb := _pending_save_thumb
 	if thumb == null and DisplayServer.get_name() != "headless":
 		var vp := get_viewport()
@@ -615,7 +634,8 @@ func _on_save_slot(slot_id: int) -> void:
 			thumb = vp.get_texture().get_image()
 	_pending_save_thumb = null
 	UiPanels.write_slot_data(slot_id, _build_save_state(), summary, int(_play_time_sec), thumb)
-	panels.refresh_title_status()
+	if panels != null:
+		panels.refresh_title_status()
 
 
 func _on_load_slot(slot_id: int) -> void:
@@ -685,6 +705,12 @@ func _on_load_slot(slot_id: int) -> void:
 		else:
 			panels.clear_dialogue_line()
 
+		# 读档状态对齐保护：若还原出来的存档包含有效的 dialogue_state 且主线程存活，显式确保主线程 wait_mode 处于 MES_SYNC 等待状态，防止 wait_mode==0 导致帧步进狂奔
+		if not _last_dialogue_entry.is_empty() and vm != null and not vm._threads.is_empty():
+			var main_th := vm._threads[0] as Sc3Vm.ThreadCtx
+			if main_th != null and main_th.alive and main_th.wait_mode == Sc3Vm.WaitMode.NONE:
+				main_th.wait_mode = Sc3Vm.WaitMode.MES_SYNC
+
 		gesture_helper.set_movie_playing(false)
 		gesture_helper.update_date_display(vm)
 		if phone_drawer != null:
@@ -701,15 +727,17 @@ func _on_load_slot(slot_id: int) -> void:
 func _on_continue_requested() -> void:
 	var latest_slot := -1
 	var latest_ts := ""
-	for s in range(UiPanels.NUM_SAVE_SLOTS):
+	var candidate_slots: Array[int] = []
+	for s in range(1, UiPanels.NUM_SAVE_SLOTS + 1):
+		candidate_slots.append(s)
+	candidate_slots.append(99)
+	for s in candidate_slots:
 		var m := UiPanels.read_slot_meta(s)
 		if not m.is_empty():
 			var ts := str(m.get("timestamp", ""))
 			if latest_slot < 0 or ts > latest_ts:
 				latest_ts = ts
 				latest_slot = s
-	if latest_slot < 0 and not UiPanels.read_slot_meta(99).is_empty():
-		latest_slot = 99
 	if latest_slot >= 0:
 		_on_load_slot(latest_slot)
 

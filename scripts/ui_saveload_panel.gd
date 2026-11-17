@@ -383,11 +383,11 @@ func _refresh_page() -> void:
 	var unlocked_tex := _assets.get("unlocked_badge") as Texture2D
 
 	for i in range(SLOTS_PER_PAGE):
-		var slot_id := _current_page * SLOTS_PER_PAGE + i
+		var slot_id := _current_page * SLOTS_PER_PAGE + i + 1
 		var meta := UiPanels.read_slot_meta(slot_id)
 		var card: Dictionary = _slot_cards[i]
 		(card["hl"] as TextureRect).visible = (i == _selected_local_idx)
-		(card["lbl_no"] as Label).text = "No. %02d" % (slot_id + 1)
+		(card["lbl_no"] as Label).text = "No. %02d" % slot_id
 
 		var thumb_tr := card["thumb"] as TextureRect
 		var lock_btn := card["lock_btn"] as Button
@@ -438,31 +438,31 @@ func _on_slot_clicked(local_idx: int) -> void:
 	for i in range(_slot_cards.size()):
 		(_slot_cards[i]["hl"] as TextureRect).visible = (i == local_idx)
 
-	var slot_id := _current_page * SLOTS_PER_PAGE + local_idx
+	var slot_id := _current_page * SLOTS_PER_PAGE + local_idx + 1
 	var meta := UiPanels.read_slot_meta(slot_id)
 
 	if _is_save:
 		if not meta.is_empty() and bool(meta.get("locked", false)):
-			_status_hint.text = "No. %02d 已锁定，请先解锁再覆盖" % (slot_id + 1)
+			_status_hint.text = "No. %02d 已锁定，请先解锁再覆盖" % slot_id
 			return
 		visible = false
 		save_slot_requested.emit(slot_id)
 	else:
 		if meta.is_empty():
-			_status_hint.text = "No. %02d 暂无存档数据" % (slot_id + 1)
+			_status_hint.text = "No. %02d 暂无存档数据" % slot_id
 			return
 		visible = false
 		load_slot_requested.emit(slot_id)
 
 
 func _toggle_lock_selected() -> void:
-	var slot_id := _current_page * SLOTS_PER_PAGE + _selected_local_idx
+	var slot_id := _current_page * SLOTS_PER_PAGE + _selected_local_idx + 1
 	var meta := UiPanels.read_slot_meta(slot_id)
 	if meta.is_empty():
 		return
 	var new_locked := not bool(meta.get("locked", false))
 	UiPanels.set_slot_locked(slot_id, new_locked)
-	_status_hint.text = "No. %02d %s" % [slot_id + 1, "已锁定" if new_locked else "已解锁"]
+	_status_hint.text = "No. %02d %s" % [slot_id, "已锁定" if new_locked else "已解锁"]
 	_refresh_page()
 
 

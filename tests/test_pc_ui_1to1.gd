@@ -199,20 +199,20 @@ func _run() -> void:
 	print("[4/7] UiConfigPanel 4 tabs, voice mute & touch scroll ok")
 
 	# 5. Save/Load 面板 6 页 48 槽位、写入/锁定防覆盖/翻页与读取验证
-	var test_slot := 47 # 第 6 页最后一格
+	var test_slot := 48 # 第 6 页最后一格 (1-based: 48)
 	UiPanels.set_slot_locked(test_slot, false)
 	main_node._play_time_sec = 3665.0
 	main_node._on_save_slot(test_slot)
-	var meta47 := UiPanels.read_slot_meta(test_slot)
-	_check(not meta47.is_empty() and int(meta47.get("play_time_sec", 0)) == 3665, "槽位 47 存档或时长记录失败")
+	var meta48 := UiPanels.read_slot_meta(test_slot)
+	_check(not meta48.is_empty() and int(meta48.get("play_time_sec", 0)) == 3665, "槽位 48 存档或时长记录失败")
 
 	main_node.panels.open_saveload(true)
 	var sl_panel := main_node.panels._saveload_view
 	sl_panel._switch_page(5)
 	_check(sl_panel._current_page == 5, "翻页至第 6 页失败")
-	sl_panel._selected_local_idx = 7 # 5*8 + 7 = 47
+	sl_panel._selected_local_idx = 7 # 5*8 + 7 + 1 = 48
 	sl_panel._toggle_lock_selected()
-	_check(bool(UiPanels.read_slot_meta(test_slot).get("locked", false)), "槽位 47 锁定失败")
+	_check(bool(UiPanels.read_slot_meta(test_slot).get("locked", false)), "槽位 48 锁定失败")
 
 	var save_emitted := [false]
 	var conn := func(_sid: int): save_emitted[0] = true
@@ -222,9 +222,9 @@ func _run() -> void:
 	sl_panel.save_slot_requested.disconnect(conn)
 
 	sl_panel._toggle_lock_selected()
-	_check(not bool(UiPanels.read_slot_meta(test_slot).get("locked", true)), "槽位 47 解锁失败")
+	_check(not bool(UiPanels.read_slot_meta(test_slot).get("locked", true)), "槽位 48 解锁失败")
 	sl_panel.close_panel()
-	# 清理测试槽位 47 文件
+	# 清理测试槽位 48 文件
 	DirAccess.remove_absolute(UiPanels.get_slot_path(test_slot))
 	if FileAccess.file_exists(UiPanels.get_slot_thumb_path(test_slot)):
 		DirAccess.remove_absolute(UiPanels.get_slot_thumb_path(test_slot))

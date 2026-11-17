@@ -53,6 +53,12 @@ func _run() -> void:
 	main_node._on_save_slot(0)
 	var meta := UiPanels.read_slot_meta(0)
 	assert(not meta.is_empty() and str(meta.get("script_name", "")) == "SG0_00_01.scx", "存档元数据写入异常")
+	var p_json0 := UiPanels.get_slot_path(0)
+	if FileAccess.file_exists(p_json0):
+		DirAccess.remove_absolute(p_json0)
+	var p_png0 := UiPanels.get_slot_thumb_path(0)
+	if FileAccess.file_exists(p_png0):
+		DirAccess.remove_absolute(p_png0)
 
 	# RINE / TIPS / Gallery 面板打开关闭
 	main_node.phone_drawer.open_phone()
