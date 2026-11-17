@@ -325,10 +325,17 @@ func get_flag(idx: int) -> int:
 
 
 func set_flag(idx: int, val: int) -> void:
+	var was_set := get_flag(idx) != 0
 	if val == 0:
 		flags.erase(idx)
 	else:
 		flags[idx] = true
+	# 当 macrosys2 L[325] / L[429] 清除来电响铃标志 Flag(2699) (1 -> 0) 时，同步关闭来电弹窗与铃声
+	if idx == 2699 and was_set and val == 0:
+		set_flag(0x4B6, 0)
+		if get_flag(2620) == 0:
+			set_flag(0x505, 0)
+		phone_event.emit(3, [])
 
 
 static func _mask_to_index(mask: int) -> int:
@@ -403,10 +410,11 @@ func notify_mes_reveal_done() -> void:
 
 
 func notify_user_advance() -> void:
-	_mes_click_pending = true
+	# 仅唤醒当前处于 MES_SYNC 等待的对白线程，绝不再额外置位 _mes_click_pending 导致连跳下一句对白
 	for th in _threads:
 		if th.alive and th.wait_mode == WaitMode.MES_SYNC:
 			th.wait_mode = WaitMode.NONE
+	_mes_click_pending = false
 
 
 func notify_movie_finished() -> void:
@@ -456,6 +464,17 @@ func get_current_script_name() -> String:
 # ==================== 帧步进主循环 ====================
 
 func step_frame(frames: int = 1) -> void:
+	# 0. 对齐 Game.exe 0x44def0：每帧驱动手机展开/收起计数 ScrWork[6601] (0..29)
+	# 防止 macrosys2.scx L[345..346] / L[355] 等待 ScrWork[6601] 时死循环卡死
+	var phone_step := 29 if skip_active else maxi(1, frames)
+	var cur_6601 := get_scr_work(6601)
+	if get_flag(2600) != 0:
+		if cur_6601 < 29:
+			set_scr_work(6601, mini(29, cur_6601 + phone_step))
+	else:
+		if cur_6601 > 0:
+			set_scr_work(6601, maxi(0, cur_6601 - phone_step))
+
 	# 1. 新一帧解除 YIELD_FRAME 并将 FRAMES 倒计时递减（快进态加速过渡帧等待）
 	var step_mult := 4 if skip_active else 1
 	for th in _threads:
@@ -1029,7 +1048,10 @@ func _exec_tbl01(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var sub := _rd_u8(data, p); p += 1
 			th.pc = p
 			if sub == 0 and not _auto_click_all_waits:
-				if not _mes_click_pending:
+				if get_flag(2606) != 0:
+					# 对齐 Game.exe 0x457d83：接听来电置位 Flag(2606) 时自动推进当前对白等待
+					set_flag(2606, 0)
+				elif not _mes_click_pending:
 					th.wait_mode = WaitMode.MES_SYNC
 				_mes_click_pending = false
 		0x0E: # SetMesMacro
@@ -1863,9 +1885,18 @@ func submit_amadeus_action(accepted: bool) -> void:
 	set_flag(0x4B6, 0) # 清除来电等待标志
 	if accepted:
 		set_flag(0x505, 1) # 通话连接标志置位
+		set_flag(2620, 1) # 0xA3C: 对齐 Game.exe 0x44e280，置位已接听标志以命中 JumpIfFlag(1, 2620, ...)
+		set_flag(2604, 1) # 0xA2C
+		set_flag(2606, 1) # 0xA2E: 对齐 Game.exe 0x457d83，触发 MesMain 自动推进
 		set_scr_work(6656, 1)
 		phone_event.emit(0, [])
+		if is_waiting_for_click():
+			notify_user_advance()
+			set_flag(2606, 0)
 	else:
 		set_flag(0x505, 0) # 挂断/拒接清除通话标志
+		set_flag(2617, 1) # 0xA39
+		set_flag(2603, 1) # 0xA2B
+		set_flag(2604, 1) # 0xA2C
 		set_scr_work(6656, 0)
 		phone_event.emit(3, [])

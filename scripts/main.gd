@@ -171,11 +171,16 @@ func _connect_signals() -> void:
 	)
 	phone_drawer.amadeus_action.connect(func(accepted: bool):
 		if vm != null:
+			if accepted and vm.is_waiting_for_click() and panels != null:
+				panels.reveal_dialogue_instant()
 			vm.submit_amadeus_action(accepted)
 	)
 	phone_drawer.unread_state_changed.connect(func(has_unread: bool, unread_count: int):
 		if gesture_helper != null:
-			gesture_helper.set_phone_unread(has_unread, unread_count)
+			var vm_unread := vm != null and vm.get_flag(2616) != 0
+			var final_has := has_unread or vm_unread
+			var final_cnt := maxi(unread_count, 1 if vm_unread else 0)
+			gesture_helper.set_phone_unread(final_has, final_cnt)
 	)
 
 	tips_panel.closed.connect(_sync_modal_block)

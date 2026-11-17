@@ -309,6 +309,8 @@ func stop_se(channel: int = -1) -> void:
 			if i < _se_pool_names.size():
 				_se_pool_names[i] = ""
 	elif channel < _se_pool.size():
+		if channel < _se_pool_names.size() and _se_pool_names[channel].to_upper().begins_with("SGSE7"):
+			return
 		_se_pool[channel].stop()
 		_se_pool_ids[channel] = -1
 		if channel < _se_pool_names.size():

@@ -768,6 +768,102 @@ func _run() -> void:
 	pd_chk._rebuild_chat_for_active_contact()
 	print("[14/14] PC 1:1 RINE text reply (< > cycle + send), Mode-1 3-sticker picker, keyboard/modal guard & idle lockout ok")
 
+	# ---------------------------------------------------------
+	# 15. 回归测试6：SG0_01_01 Amadeus 来电（"不过要是再继续无视下去的话，感觉会很不好。"）
+	# 覆盖：不跳句、铃声不被 AudioReset(2) 误杀、读档恢复来电遮罩、挂断后点 Amadeus 图标重开、接听跳转 L6、忽略推进不卡死
+	# ---------------------------------------------------------
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.audio.stop_se(-1)
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_01_01.scx", 5)
+
+	var seen_call_sids: Array[int] = []
+	for _ci in range(6):
+		for _st in range(300):
+			main_node.vm.step_frame(1)
+			if main_node.vm.is_waiting_for_click():
+				break
+		_check(main_node.vm.is_waiting_for_click(), "SG0_01_01 L5 第 %d 句应正常停在对白等待" % _ci)
+		var cur_sid := int((main_node.vm.backlog.back() as Dictionary).get("str_id", -1))
+		seen_call_sids.append(cur_sid)
+		if cur_sid == 577:
+			break
+		main_node.vm.notify_user_advance()
+	_check(seen_call_sids == [572, 573, 574, 575, 576, 577],
+		"notify_user_advance 不得隔句吞对白，应完整经过 572..577，实际=%s" % str(seen_call_sids))
+	_check(main_node.vm.get_flag(2699) == 1 and main_node.vm.get_flag(2613) == 0 and main_node.vm.get_flag(2620) == 0,
+		"str_id=577 处应处于 Amadeus 来电响铃态 (2699=1, 2613=0, 2620=0)")
+	_check(pd_chk._has_unread_call and pd_chk._amadeus_overlay.visible and main_node.gesture_helper.is_phone_unread(),
+		"str_id=577 处来电遮罩与左上角未读红点均应激活")
+	# 验证 AudioReset(2) 不会误停正在播放的 SGSE700.ogg 铃声
+	main_node.audio._se_pool_names[2] = "SGSE700.ogg"
+	main_node.audio.stop_se(2)
+	_check(main_node.audio.is_se_playing("SGSE700.ogg"), "AudioReset(2) 不得误杀 SGSE700.ogg 来电铃声")
+
+	# 模拟旧版/新版存档读档后恢复来电界面（含遗留存档仅保存 has_unread_call 的场景）
+	var snap_call := main_node._build_save_state()
+	var legacy_phone_st: Dictionary = (snap_call["phone_state"] as Dictionary).duplicate(true)
+	legacy_phone_st.erase("amadeus_overlay_visible")
+	pd_chk.reset_phone_state()
+	main_node.vm.import_state(snap_call)
+	pd_chk.import_state(legacy_phone_st)
+	_check(pd_chk._has_unread_call and pd_chk._amadeus_overlay.visible,
+		"读档恢复（含旧存档）在未接来电状态下必须恢复来电遮罩可见")
+	pd_chk.open_phone()
+	_check(pd_chk._amadeus_overlay.visible and main_node.audio.is_se_playing("SGSE700.ogg"),
+		"点开手机时若存在未接来电应直接呈现来电界面并响铃")
+
+	# 点挂断 CANCEL 后，若仍在来电窗内点击桌面 Amadeus 图标，应重新弹出接听/挂断界面而非空 RINE
+	btn_amadeus_cancel.pressed.emit()
+	_check(not pd_chk._amadeus_overlay.visible and not main_node.audio.is_se_playing("SGSE700.ogg"),
+		"挂断后应隐藏来电遮罩并停止铃声")
+	pd_chk.open_phone()
+	pd_chk._open_amadeus_app()
+	_check(pd_chk._amadeus_overlay.visible and pd_chk._current_screen != UiPhoneRine.PhoneScreen.CHAT,
+		"来电窗内点击 Amadeus 图标应弹出来电接听界面，不可进入空 RINE 聊天")
+
+	# Path A: 点击接听 CONNECT -> 置位 Flag(2620)=1 并立即推进进入 L6 (str_id=579)
+	btn_amadeus_conn.pressed.emit()
+	_check(main_node.vm.get_flag(2620) == 1 and not pd_chk.is_phone_open(),
+		"点击接听后应置位 Flag(2620)=1 并收起手机抽屉")
+	for _st in range(300):
+		main_node.vm.step_frame(1)
+		if main_node.vm.is_waiting_for_click():
+			break
+	var ans_sid := int((main_node.vm.backlog.back() as Dictionary).get("str_id", -1))
+	_check(ans_sid == 579, "接听来电后应自动跳转 L6 并停在 str_id=579，实际=%d" % ans_sid)
+
+	# Path B: 不接电话直接点击推进 str_id=577 -> macrosys2 L[343] 驱动 ScrWork[6601] 到 29 并推进至 str_id=578
+	pd_chk.reset_phone_state()
+	pd_chk.close_phone()
+	main_node.vm.start_boot_script()
+	for _bf in range(15):
+		main_node.vm.step_frame(1)
+	main_node.vm.jump_to_script("SG0_01_01.scx", 5)
+	for _ci in range(6):
+		for _st in range(300):
+			main_node.vm.step_frame(1)
+			if main_node.vm.is_waiting_for_click():
+				break
+		if int((main_node.vm.backlog.back() as Dictionary).get("str_id", -1)) == 577:
+			break
+		main_node.vm.notify_user_advance()
+	main_node.vm.notify_user_advance()
+	for _st in range(300):
+		main_node.vm.step_frame(1)
+		if main_node.vm.is_waiting_for_click():
+			break
+	_check(main_node.vm.is_waiting_for_click(), "不接电话推进 str_id=577 不得在 macrosys2 L[345..346] 卡死")
+	var ign_sid := int((main_node.vm.backlog.back() as Dictionary).get("str_id", -1))
+	_check(ign_sid == 578 and main_node.vm.get_scr_work(6601) == 29 and main_node.vm.get_flag(2699) == 0,
+		"不接电话推进应完成 ScrWork[6601]=29 展开计数、清除 Flag(2699)=0 并停在 str_id=578，实际 sid=%d sw6601=%d" % [ign_sid, main_node.vm.get_scr_work(6601)])
+	_check(not pd_chk._amadeus_overlay.visible and not pd_chk._has_unread_call and not main_node.audio.is_se_playing("SGSE700.ogg"),
+		"忽略来电结束响铃后应同步隐藏来电遮罩、清除未接状态并停止铃声")
+	print("[15/15] SG0_01_01 Amadeus call (no line-skip, save/load restore, Amadeus icon reopen, CONNECT->L6 & ignore->578) ok")
+
 	main_node.queue_free()
 	if _failed:
 		quit(1)

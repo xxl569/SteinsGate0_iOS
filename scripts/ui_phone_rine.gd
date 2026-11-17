@@ -302,6 +302,7 @@ func _ensure_ui() -> void:
 		_has_unread_call = false
 		_stop_ringtone()
 		_refresh_unread_badges()
+		close_phone()
 		amadeus_action.emit(true)
 	)
 	var btn_cancel := Button.new()
@@ -312,6 +313,7 @@ func _ensure_ui() -> void:
 		_has_unread_call = false
 		_stop_ringtone()
 		_refresh_unread_badges()
+		close_phone()
 		amadeus_action.emit(false)
 	)
 	_connect_bar.add_child(btn_conn)
@@ -1058,7 +1060,35 @@ func _ensure_best_rine_contact() -> void:
 			_active_contact_idx = 1
 
 
+func _is_incoming_call_active() -> bool:
+	if _has_unread_call:
+		return true
+	if _amadeus_overlay != null and _amadeus_overlay.visible:
+		return true
+	if _vm != null and _vm.get_flag(2620) == 0:
+		if _vm.get_flag(2699) != 0:
+			return true
+		if _vm.get_flag(2743) != 0 and _vm.get_flag(2613) == 0:
+			return true
+	return false
+
+
+func _show_incoming_call_overlay(ensure_ringtone: bool = true) -> void:
+	_ensure_ui()
+	unlock_amadeus()
+	if _status_label != null:
+		_status_label.text = "Amadeus"
+	if _amadeus_overlay != null:
+		_amadeus_overlay.visible = true
+	if ensure_ringtone:
+		_play_ringtone()
+
+
 func _open_amadeus_app() -> void:
+	# 若当前正处于未接/响铃中的 Amadeus 来电阶段，点击 Amadeus 图标直接弹出接听/挂断来电界面
+	if _is_incoming_call_active():
+		_show_incoming_call_overlay(true)
+		return
 	_active_contact_idx = 3
 	_refresh_chat_header()
 	switch_screen(PhoneScreen.CHAT)
@@ -1195,6 +1225,15 @@ func unlock_amadeus() -> void:
 	_refresh_contacts_visibility()
 
 
+func _play_ringtone() -> void:
+	if _audio == null:
+		return
+	var rt_idx: int = _config.phone_ringtone_idx if _config != null else 0
+	var se_name := "SGSE%d.ogg" % (700 + clampi(rt_idx, 0, RINGTONE_NAMES.size() - 1))
+	if not _audio.is_se_playing(se_name):
+		_audio.play_se_by_name(se_name, true)
+
+
 func _stop_ringtone() -> void:
 	if _audio == null:
 		return
@@ -1221,7 +1260,7 @@ func switch_screen(target: int, push_history: bool = true) -> void:
 	_screen_ringtone.visible = (target == PhoneScreen.RINGTONE)
 
 	var names := ["HOME", "電話", "RINE", "設定", "壁纸", "铃声"]
-	_status_label.text = names[clampi(target, 0, names.size() - 1)]
+	_status_label.text = "Amadeus" if (_amadeus_overlay != null and _amadeus_overlay.visible) else names[clampi(target, 0, names.size() - 1)]
 	if target == PhoneScreen.CHAT:
 		if _active_contact_idx <= 0:
 			_active_contact_idx = 1
@@ -1538,7 +1577,9 @@ func open_phone() -> void:
 	_ensure_ui()
 	_sync_status_date()
 	_is_open = true
-	if _current_screen == PhoneScreen.CHAT:
+	if _has_unread_call or (_amadeus_overlay != null and _amadeus_overlay.visible):
+		_show_incoming_call_overlay(true)
+	elif _current_screen == PhoneScreen.CHAT:
 		_clear_contact_unread(_active_contact_idx)
 	_animate_x(1340.0)
 	panel_toggled.emit(true)
@@ -1587,16 +1628,9 @@ func _on_phone_event(subop: int, args: Array) -> void:
 		or (subop == 1 and (arg0 == 1 or arg0 >= 180))
 	)
 	if is_real_call:
-		unlock_amadeus()
-		_status_label.text = "Amadeus"
-		if _amadeus_overlay != null:
-			_amadeus_overlay.visible = true
-		if not _is_open:
-			_has_unread_call = true
-			_refresh_unread_badges()
-		if _audio != null:
-			var rt_idx: int = _config.phone_ringtone_idx if _config != null else 0
-			_audio.play_se_by_name("SGSE%d.ogg" % (700 + clampi(rt_idx, 0, RINGTONE_NAMES.size() - 1)), true)
+		_has_unread_call = true
+		_show_incoming_call_overlay(true)
+		_refresh_unread_badges()
 	elif subop == 255 or subop == 5 or subop == 3:
 		if _amadeus_overlay != null:
 			_amadeus_overlay.visible = false
@@ -1890,6 +1924,7 @@ func export_state() -> Dictionary:
 		"self_contact_id": _self_contact_id,
 		"unread_by_contact": ubc,
 		"has_unread_call": _has_unread_call,
+		"amadeus_overlay_visible": _amadeus_overlay != null and _amadeus_overlay.visible,
 	}
 
 
@@ -1933,10 +1968,19 @@ func import_state(st: Dictionary) -> void:
 			if cnt > 0:
 				_unread_by_contact[int(cid_str)] = cnt
 	_has_unread_call = bool(st.get("has_unread_call", false))
+	var show_call: bool = bool(st.get("amadeus_overlay_visible", false)) or _has_unread_call
+	if not show_call and _vm != null:
+		show_call = (_vm.get_flag(0x4B6) != 0 and _vm.get_flag(2699) != 0 and _vm.get_flag(2620) == 0)
+	if _amadeus_overlay != null:
+		_amadeus_overlay.visible = show_call
+	if show_call:
+		_has_unread_call = true
 	_populate_sticker_tray()
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()
 	_refresh_chat_header()
+	if show_call and _status_label != null:
+		_status_label.text = "Amadeus"
 	_refresh_unread_badges()
 
 
