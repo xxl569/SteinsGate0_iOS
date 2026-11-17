@@ -6,8 +6,8 @@ title STEINS;GATE 0 - Windows Trial Launcher
 echo ======================================================================
 echo   STEINS;GATE 0 iOS BYOA - Windows Trial (Godot 4.3 + MgsNative)
 echo   Mode   : GL Compatibility (1280x720 Windowed)
-echo   Assets : U:\anti\projects\STEINS GATE 0\USRDIR
-echo   Movie  : U:\anti\temp\SteinsGate0_iOS\SteinsGate0_iOS_Documents\movie
+echo   Assets : U:\anti\projects\SteinsGate0_iOS_BYOA
+echo   Movie  : U:\anti\projects\SteinsGate0_iOS_BYOA\movie
 echo ======================================================================
 echo.
 
@@ -20,7 +20,7 @@ if "%GODOT_BIN%"=="" (
     exit /b 1
 )
 
-"%GODOT_BIN%" --path "." scenes/main.tscn %*
+"%GODOT_BIN%" --path "." scenes/main.tscn --game-dir="U:\anti\projects\SteinsGate0_iOS_BYOA" --movie-dir="U:\anti\projects\SteinsGate0_iOS_BYOA\movie" %*
 if errorlevel 1 (
     echo [ERROR] Godot exited with code %errorlevel%
     pause

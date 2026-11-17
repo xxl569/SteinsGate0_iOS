@@ -85,8 +85,9 @@ func get_candidate_game_dirs(config: ConfigManager = null) -> PackedStringArray:
 	list.append(docs_parent.path_join("Documents/USRDIR"))
 	list.append(docs_parent.path_join("Documents/game"))
 
-	# macOS / Windows 桌面同级目录调试路径
+	# macOS / Windows 桌面同级目录调试路径与独立 BYOA 外置包路径
 	var exe_dir := OS.get_executable_path().get_base_dir()
+	list.append("U:/anti/projects/SteinsGate0_iOS_BYOA")
 	list.append(exe_dir)
 	list.append(exe_dir.path_join("USRDIR"))
 	list.append("U:/anti/projects/STEINS GATE 0")
