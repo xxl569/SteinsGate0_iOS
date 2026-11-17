@@ -330,6 +330,8 @@ func _sync_modal_block() -> void:
 		or (tips_panel != null and tips_panel.visible)
 		or (gallery != null and gallery.visible)
 	)
+	if blocked and panels != null:
+		panels.hide_tips_toast()
 	gesture_helper.set_modal_blocked(blocked)
 
 

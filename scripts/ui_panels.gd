@@ -531,6 +531,14 @@ func show_tips_toast(tip_id: int) -> void:
 	_tips_toast_timer = TIPS_TOAST_DURATION
 
 
+func hide_tips_toast() -> void:
+	_tips_toast_timer = 0.0
+	if _tips_banner_rect != null:
+		_tips_banner_rect.visible = false
+	if _tips_toast != null:
+		_tips_toast.visible = false
+
+
 func show_byoa_wizard(missing_paths: PackedStringArray) -> void:
 	_ensure_ui()
 	_byoa_view.visible = true
@@ -547,6 +555,7 @@ func hide_byoa_wizard() -> void:
 
 func show_title_screen() -> void:
 	_ensure_ui()
+	hide_tips_toast()
 	_title_view.visible = true
 	_dialogue_view.visible = false
 	_choices_panel.visible = false

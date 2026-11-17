@@ -1329,9 +1329,10 @@ func _exec_tbl10(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 					if out_flag_id >= 0:
 						set_flag(out_flag_id, 1 if unlocked_tips.has(tip_id) else 0)
 				else:
-					unlock_tip(tip_id)
+					var newly_unlocked := unlock_tip(tip_id)
 					if out_flag_id >= 0:
-						set_flag(out_flag_id, 1)
+						# 对齐 Game.exe 0x461427 (1 - GetTipStatus)：仅首次新解锁时输出 1，已解锁返回 0
+						set_flag(out_flag_id, 1 if newly_unlocked else 0)
 		0x2A:
 			p += 1
 			for _k in range(3):

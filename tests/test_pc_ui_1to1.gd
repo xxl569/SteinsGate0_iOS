@@ -597,10 +597,16 @@ func _run() -> void:
 		"SG0_00_01.scx 实跑应通过 0x10 0x27 解锁 TIPS 73/144，实际=" + str(sig_tips))
 	_check(main_node.vm.get_scr_work(45) == 5,
 		"macrosys label 0x92/0x9a 应将 ScrWork[45] 设为高亮色 5，实际=" + str(main_node.vm.get_scr_work(45)))
-	# 再次触发同一个 tip_id 不应重复 emit
+	# 再次触发同一个 tip_id 不应重复 emit，且再次调用 macrosys 0x92 时 ScrWork[45] 应回归 0（对齐 Game.exe 0x461427）
 	var prev_sig_cnt := sig_tips.size()
 	main_node.vm.unlock_tip(73)
 	_check(sig_tips.size() == prev_sig_cnt, "已解锁过的 TIPS 不应重复触发 tips_unlocked 信号")
+	main_node.vm.jump_to_script("macrosys.scx", 0x92)
+	main_node.vm.set_scr_work(61, 73)
+	for _mf in range(10):
+		main_node.vm.step_frame(1)
+	_check(main_node.vm.get_scr_work(45) == 0,
+		"已解锁过的 TIPS 再次经过 macrosys 0x92 时 ScrWork[45] 应为 0，实际=" + str(main_node.vm.get_scr_work(45)))
 
 	# 验证正上方 TIPS 横幅在屏幕顶部正中
 	main_node.panels.show_tips_toast(73)
@@ -612,8 +618,11 @@ func _run() -> void:
 		_check(absf(bx - 579.0) < 4.0 and by >= 0.0 and by <= 30.0,
 			"TIPS 横幅应位于屏幕正上方居中 (x≈579.0, y<=30)，实际=(" + str(bx) + ", " + str(by) + ")")
 
-	# 验证 UiTips 列表与持久化状态实时更新
+	# 验证 UiTips 列表与持久化状态实时更新，且打开 UiTips 时隐藏横幅避免遮挡
 	main_node.tips_panel.open_panel()
+	main_node._sync_modal_block()
+	_check(main_node.panels._tips_banner_rect == null or not main_node.panels._tips_banner_rect.visible,
+		"打开 UiTips 时应隐藏 TIPS 弹窗横幅以避免遮挡")
 	_check(main_node.tips_panel._is_tip_unlocked(73) and main_node.tips_panel._is_tip_unlocked(144),
 		"UiTips 应实时同步显示刚解锁的 TIPS 73/144")
 	main_node.tips_panel.close_panel()
