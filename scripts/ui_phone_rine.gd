@@ -1999,10 +1999,19 @@ func export_state() -> Dictionary:
 	}
 
 
+func serialize_state() -> Dictionary:
+	return export_state()
+
+
+func deserialize_state(st: Dictionary) -> void:
+	import_state(st)
+
+
 func import_state(st: Dictionary) -> void:
 	if st.is_empty():
 		reset_phone_state()
 		return
+	_ensure_ui()
 	_active_contact_idx = int(st.get("active_contact_idx", 1))
 	_amadeus_unlocked = bool(st.get("amadeus_unlocked", false))
 	_unlocked_contacts.clear()
@@ -2046,6 +2055,9 @@ func import_state(st: Dictionary) -> void:
 	if show_call:
 		_has_unread_call = true
 		_update_incoming_call_display()
+		_play_ringtone()
+	else:
+		_stop_ringtone()
 	_populate_sticker_tray()
 	_refresh_contacts_visibility()
 	_refresh_reply_prompt()

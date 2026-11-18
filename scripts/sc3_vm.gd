@@ -115,12 +115,52 @@ var _incoming_call_notified: bool = false # 防止同一来电窗口内重复触
 
 const READ_LINES_PATH := "user://read_lines.json"
 const UNLOCKED_TIPS_PATH := "user://unlocked_tips.json"
+const SYSTEM_FLAGS_PATH := "user://system_flags.json"
+const SYSTEM_FLAG_START := 800
+const SYSTEM_FLAG_END := 899
 
 
 func _init(vfs: MgsVfs = null) -> void:
 	_vfs = vfs
 	load_read_lines()
 	load_unlocked_tips()
+	load_system_flags()
+
+
+static func is_system_flag(idx: int) -> bool:
+	return idx >= SYSTEM_FLAG_START and idx <= SYSTEM_FLAG_END
+
+
+func load_system_flags() -> void:
+	if not FileAccess.file_exists(SYSTEM_FLAGS_PATH):
+		return
+	var txt := FileAccess.get_file_as_string(SYSTEM_FLAGS_PATH)
+	if txt.strip_edges().is_empty():
+		return
+	var parsed: Variant = JSON.parse_string(txt)
+	if parsed is Array:
+		for fk in parsed:
+			var idx := int(fk)
+			if is_system_flag(idx):
+				flags[idx] = true
+	elif parsed is Dictionary:
+		for k in (parsed as Dictionary).keys():
+			var idx := int(k)
+			if is_system_flag(idx) and bool((parsed as Dictionary)[k]):
+				flags[idx] = true
+
+
+func save_system_flags() -> void:
+	var list: Array[int] = []
+	for k in flags.keys():
+		var idx := int(k)
+		if is_system_flag(idx) and bool(flags[k]):
+			list.append(idx)
+	list.sort()
+	var f := FileAccess.open(SYSTEM_FLAGS_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(list))
+		f.close()
 
 
 func load_unlocked_tips() -> void:
@@ -177,7 +217,15 @@ func reset_vm() -> void:
 	_next_thread_id = 1
 	_active_slot = 0
 	scr_work.clear()
+	var sys_flags: Dictionary = {}
+	for k in flags.keys():
+		var ik := int(k)
+		if is_system_flag(ik) and bool(flags[k]):
+			sys_flags[ik] = true
 	flags.clear()
+	for k in sys_flags.keys():
+		flags[k] = true
+	load_system_flags()
 	backlog.clear()
 	_pending_choices.clear()
 	_mes_reveal_done = true
@@ -337,6 +385,8 @@ func set_flag(idx: int, val: int) -> void:
 		flags.erase(idx)
 	else:
 		flags[idx] = true
+	if is_system_flag(idx):
+		save_system_flags()
 	if idx >= 2410 and idx <= 2417 and was_set and val == 0 and not _in_chara_swap:
 		# 立绘槽位注销（macrosys L36/L42 宏全角色清理或指令释放）：按槽位位掩码发射释放信号
 		var slot_mask := 1 << (idx - 2410)
@@ -677,7 +727,8 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			var target_slot := int(e1["value"])
 			if _scripts.has(target_slot):
 				th.script_slot = target_slot
-				_active_slot = target_slot
+				if th.group_id == 0:
+					_active_slot = target_slot
 				_jump_label(th, lid)
 			else:
 				th.pc = p
@@ -690,6 +741,8 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			if _scripts.has(target_slot):
 				th.call_stack.append({"slot": th.script_slot, "pc": ret_pc})
 				th.script_slot = target_slot
+				if th.group_id == 0:
+					_active_slot = target_slot
 				_jump_label(th, lid)
 			else:
 				th.pc = p
@@ -698,6 +751,8 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 				var frame: Dictionary = th.call_stack.pop_back()
 				th.script_slot = int(frame["slot"])
 				th.pc = int(frame["pc"])
+				if th.group_id == 0:
+					_active_slot = th.script_slot
 			else:
 				th.alive = false
 		0x0F: # Loop(label, count_expr)
@@ -941,25 +996,60 @@ func _exec_tbl00(th: ThreadCtx, data: PackedByteArray, p: int, b1: int) -> void:
 			p = Sc3Expr.skip(data, p)
 			p += 2
 			th.pc = p
-		0x54:
-			var _sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p)
-			p += 4
-			th.pc = p
-		0x55:
-			var _sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
-			p += 2
-			th.pc = p
-		0x56:
-			var _sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p); p = Sc3Expr.skip(data, p)
-			p += 4
-			th.pc = p
-		0x57:
-			var _sub := _rd_u8(data, p); p += 1
-			p = Sc3Expr.skip(data, p)
-			th.pc = p
+		0x54: # CallIf(subop, flag_expr, label, ret_id) (Game.exe 0x45d720)
+			var sub := _rd_u8(data, p); p += 1
+			var e_flag := Sc3Expr.eval(data, p, self, th); p = int(e_flag["end_pos"])
+			var lid := _rd_u16(data, p); p += 2
+			var rid := _rd_u16(data, p); p += 2
+			if get_flag(int(e_flag["value"])) == sub:
+				var ret_pc := int(ret_addrs[rid]) if rid < ret_addrs.size() else p
+				th.call_stack.append({"slot": th.script_slot, "pc": ret_pc})
+				_jump_label(th, lid)
+			else:
+				th.pc = p
+		0x55: # JumpFarIf(subop, flag_expr, slot_expr, label) (Game.exe 0x45d7d0)
+			var sub := _rd_u8(data, p); p += 1
+			var e_flag := Sc3Expr.eval(data, p, self, th); p = int(e_flag["end_pos"])
+			var e_slot := Sc3Expr.eval(data, p, self, th); p = int(e_slot["end_pos"])
+			var lid := _rd_u16(data, p); p += 2
+			var target_slot := int(e_slot["value"])
+			if get_flag(int(e_flag["value"])) == sub and _scripts.has(target_slot):
+				th.script_slot = target_slot
+				if th.group_id == 0:
+					_active_slot = target_slot
+				_jump_label(th, lid)
+			else:
+				th.pc = p
+		0x56: # CallFarIf(subop, flag_expr, slot_expr, label, ret_id) (Game.exe 0x45d850)
+			var sub := _rd_u8(data, p); p += 1
+			var e_flag := Sc3Expr.eval(data, p, self, th); p = int(e_flag["end_pos"])
+			var e_slot := Sc3Expr.eval(data, p, self, th); p = int(e_slot["end_pos"])
+			var lid := _rd_u16(data, p); p += 2
+			var rid := _rd_u16(data, p); p += 2
+			var target_slot := int(e_slot["value"])
+			if get_flag(int(e_flag["value"])) == sub and _scripts.has(target_slot):
+				var ret_pc := int(ret_addrs[rid]) if rid < ret_addrs.size() else p
+				th.call_stack.append({"slot": th.script_slot, "pc": ret_pc})
+				th.script_slot = target_slot
+				if th.group_id == 0:
+					_active_slot = target_slot
+				_jump_label(th, lid)
+			else:
+				th.pc = p
+		0x57: # ReturnIfFlag(subop, flag_expr) (Game.exe 0x45d910)
+			var sub := _rd_u8(data, p); p += 1
+			var e1 := Sc3Expr.eval(data, p, self, th); p = int(e1["end_pos"])
+			if get_flag(int(e1["value"])) == sub:
+				if not th.call_stack.is_empty():
+					var frame: Dictionary = th.call_stack.pop_back()
+					th.script_slot = int(frame["slot"])
+					th.pc = int(frame["pc"])
+					if th.group_id == 0:
+						_active_slot = th.script_slot
+				else:
+					th.pc = p
+			else:
+				th.pc = p
 		0x58:
 			var sub := _rd_u8(data, p); p += 1
 			var cnt := 4 if (sub == 2 or sub == 3) else 1
@@ -1503,7 +1593,9 @@ func export_state() -> Dictionary:
 		sw[str(k)] = scr_work[k]
 	var fl := []
 	for k in flags.keys():
-		fl.append(int(k))
+		var ik := int(k)
+		if not is_system_flag(ik):
+			fl.append(ik)
 
 	return {
 		"version": 1,
@@ -1544,7 +1636,10 @@ func import_state(state: Dictionary) -> bool:
 	for k in sw.keys():
 		set_scr_work(int(k), int(sw[k]))
 	for fk in state.get("flags", []):
-		flags[int(fk)] = true
+		var ik := int(fk)
+		if not is_system_flag(ik):
+			flags[ik] = true
+	load_system_flags()
 	_incoming_call_notified = is_incoming_call_active()
 	for tk in state.get("unlocked_tips", []):
 		unlocked_tips[int(tk)] = true
@@ -1768,8 +1863,8 @@ func _run_rine_subinterp() -> void:
 		guard += 1
 		var p := _rine_pc
 		if p + 1 >= data.size():
+			_finish_rine_round()
 			_rine_active = false
-			set_scr_work(6656, 99)
 			break
 		var b0 := int(data[p])
 		var b1 := int(data[p + 1])
@@ -1824,30 +1919,20 @@ func _run_rine_subinterp() -> void:
 						set_flag(2616, 1)
 						set_flag(2615, 0)
 				rine_event.emit(15, args)
-			elif sub == 0x0B: # 本轮回复结束
+			elif sub == 0x0B: # 本轮回复结束（Game.exe 0x461b59 -> 0x453d30 后立即 ret）
 				_rine_pc = sp
 				_finish_rine_round()
 				rine_event.emit(11, [])
-				# 若紧随指令不是继续的 RINE 动作（例如 End/Return），结束子解释器
-				if _rine_pc + 2 >= data.size():
-					_rine_active = false
-					set_scr_work(6656, 99)
-					break
-				var nb0 := int(data[_rine_pc])
-				var nb1 := int(data[_rine_pc + 1])
-				var is_next_rine := ((nb0 & 0x7F) == 0x10 and nb1 == 0x37) or (nb0 == 0x00 and (nb1 == 0x12 or nb1 == 0x13))
-				if not is_next_rine:
-					_rine_active = false
-					set_scr_work(6656, 99)
-					break
-			else:
 				_rine_active = false
-				set_scr_work(6656, 99)
+				break
+			else:
+				_finish_rine_round()
+				_rine_active = false
 				break
 		else:
 			# 遇到 End (00:00) / Return (00:0E) 等非 RINE 子指令，标记本段完成
+			_finish_rine_round()
 			_rine_active = false
-			set_scr_work(6656, 99)
 			break
 
 

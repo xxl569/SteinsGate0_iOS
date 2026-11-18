@@ -62,7 +62,7 @@ func _notification(what: int) -> void:
 
 
 func _apply_safe_area() -> void:
-	## 依据刘海屏 / Home 指示条安全区微调 HUD 四周边距（桌面及无刘海环境保持原 PC 偏移）
+	## 依据刘海屏 / Home 指示条安全区微调 HUD 四周边距（在 16:9 黑边吸收安全区后仅内缩侵入游戏视口的部分）
 	var left_inset: float = 0.0
 	var top_inset: float = 0.0
 	var right_inset: float = 0.0
@@ -70,12 +70,26 @@ func _apply_safe_area() -> void:
 	var win_size: Vector2i = DisplayServer.window_get_size()
 	var safe: Rect2i = DisplayServer.get_display_safe_area()
 	if win_size.x > 0 and win_size.y > 0 and safe.size.x > 0 and safe.size.y > 0:
-		var sx: float = 1920.0 / float(win_size.x)
-		var sy: float = 1080.0 / float(win_size.y)
-		left_inset = clampf(float(safe.position.x) * sx, 0.0, 120.0)
-		top_inset = clampf(float(safe.position.y) * sy, 0.0, 80.0)
-		right_inset = clampf(float(win_size.x - safe.end.x) * sx, 0.0, 120.0)
-		bottom_inset = clampf(float(win_size.y - safe.end.y) * sy, 0.0, 36.0)
+		var scale_factor: float = minf(float(win_size.x) / 1920.0, float(win_size.y) / 1080.0)
+		if scale_factor > 0.0:
+			var game_w: float = 1920.0 * scale_factor
+			var game_h: float = 1080.0 * scale_factor
+			var game_x: float = (float(win_size.x) - game_w) * 0.5
+			var game_y: float = (float(win_size.y) - game_h) * 0.5
+
+			var raw_left_intrusion: float = float(safe.position.x) - game_x
+			var raw_top_intrusion: float = float(safe.position.y) - game_y
+			var raw_right_intrusion: float = (game_x + game_w) - float(safe.end.x)
+			var raw_bottom_intrusion: float = (game_y + game_h) - float(safe.end.y)
+
+			if raw_left_intrusion > 0.0:
+				left_inset = clampf(raw_left_intrusion / scale_factor, 0.0, 120.0)
+			if raw_top_intrusion > 0.0:
+				top_inset = clampf(raw_top_intrusion / scale_factor, 0.0, 80.0)
+			if raw_right_intrusion > 0.0:
+				right_inset = clampf(raw_right_intrusion / scale_factor, 0.0, 120.0)
+			if raw_bottom_intrusion > 0.0:
+				bottom_inset = clampf(raw_bottom_intrusion / scale_factor, 0.0, 36.0)
 
 	if _date_phone_btn != null:
 		var l: float = 24.0 + left_inset
